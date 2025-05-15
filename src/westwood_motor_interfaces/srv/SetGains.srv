@@ -1,0 +1,20 @@
+# Solicitud para configurar ganancias de control
+int32[] motor_ids             # IDs de los motores a configurar
+float64 p_gain_position       # Ganancia proporcional para el control de posición
+float64 i_gain_position       # Ganancia integral para el control de posición
+float64 d_gain_position       # Ganancia derivativa para el control de posición
+float64 p_gain_force          # Ganancia proporcional para el control de fuerza
+float64 i_gain_force          # Ganancia integral para el control de fuerza
+float64 d_gain_force          # Ganancia derivativa para el control de fuerza 
+float64 p_gain_iq             # Ganancia proporcional para el control de corriente iq
+float64 i_gain_iq             # Ganancia integral para el control de corriente iq
+float64 d_gain_iq             # Ganancia derivativa para el control de corriente iq
+float64 p_gain_id             # Ganancia proporcional para el control de corriente id
+float64 i_gain_id             # Ganancia integral para el control de corriente id
+float64 d_gain_id             # Ganancia derivativa para el control de corriente id
+float64 iq_max                # Límite máximo de corriente iq
+float64 kt                    # Constante de torque del motor
+---
+# Respuesta
+bool success                  # Indica si la configuración fue exitosa
+string message                # Mensaje descriptivo del resultado 

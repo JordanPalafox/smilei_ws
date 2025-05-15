@@ -1,0 +1,5 @@
+int32[] motor_ids
+---
+bool success
+string message
+float32[] positions 

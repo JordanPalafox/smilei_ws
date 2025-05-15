@@ -1,48 +1,65 @@
-from launch import LaunchDescription
-from launch_ros.actions import Node
-from launch.substitutions import LaunchConfiguration
-from launch.actions import DeclareLaunchArgument
-from ament_index_python.packages import get_package_share_directory
+#!/usr/bin/env python3
+
+"""
+Archivo de lanzamiento para el nodo de la máquina de estados SMILEi.
+Inicia el servidor de motores y la máquina de estados.
+"""
 
 import os
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument, 
+    IncludeLaunchDescription, 
+    GroupAction
+)
+from launch.conditions import IfCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
 
 def generate_launch_description():
-    # Obtener la ruta del paquete
-    pkg_dir = get_package_share_directory('smilei_state_machine')
+    # Paths
+    westwood_motor_launch_dir = os.path.join(
+        get_package_share_directory('westwood_motor_control_sdk_wrapper'),
+        'launch'
+    )
     
-    # Archivo de configuración con los parámetros del robot
-    config_file = os.path.join(pkg_dir, 'config', 'robot_params.yaml')
+    # Launch arguments
+    use_sim_time = LaunchConfiguration('use_sim_time', default='false')
     
-    # Argumentos de lanzamiento
-    use_sim_time = LaunchConfiguration('use_sim_time')
+    # Declare launch arguments
+    declare_use_sim_time_cmd = DeclareLaunchArgument(
+        'use_sim_time',
+        default_value='false',
+        description='Use simulation (Gazebo) clock if true'
+    )
     
-    return LaunchDescription([
-        # Declarar argumentos
-        DeclareLaunchArgument(
-            'use_sim_time',
-            default_value='false',
-            description='Usar tiempo de simulación'
-        ),
-        
-        # Nodo del servidor de motores Westwood
-        Node(
-            package='westwood_motor_control_sdk_wrapper',
-            executable='westwood_motor_server.py',
-            name='westwood_motor_server',
-            parameters=[
-                {'baudrate': 8000000},
-                {'motor_ids': [1, 2, 3, 4, 5, 6, 7, 8]},
-                {'debug': False}
-            ],
-            output='screen'
-        ),
-        
-        # Nodo de la máquina de estados de SMILEi
-        Node(
-            package='smilei_state_machine',
-            executable='smilei_state_machine_node',
-            name='smilei_state_machine',
-            parameters=[config_file],
-            output='screen'
-        )
-    ]) 
+    # Include Westwood motor server launch
+    motor_server_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([westwood_motor_launch_dir, '/westwood_motor_server.launch.py']),
+        launch_arguments={
+            'use_sim_time': use_sim_time
+        }.items()
+    )
+    
+    # SMILEi state machine node
+    smilei_state_machine_cmd = Node(
+        package='smilei_state_machine',
+        executable='smilei_state_machine_node',
+        name='smilei_state_machine',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time}]
+    )
+    
+    # Create launch description
+    ld = LaunchDescription()
+    
+    # Add declarations
+    ld.add_action(declare_use_sim_time_cmd)
+    
+    # Add launches
+    ld.add_action(motor_server_launch)
+    ld.add_action(smilei_state_machine_cmd)
+    
+    return ld 

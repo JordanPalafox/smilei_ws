@@ -1,0 +1,5 @@
+# No se necesita entrada para este servicio
+---
+bool success
+string message
+int32[] motor_ids 
