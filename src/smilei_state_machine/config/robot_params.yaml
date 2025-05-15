@@ -1,0 +1,81 @@
+/**:
+  ros__parameters:
+    motor_ids: [1, 2, 3, 4, 5, 6, 7, 8]
+    baudrate: 8000000
+    port: "/dev/ttyUSB0"
+    debug: false
+    
+    joint_limits:
+      q_l1: [-90, 90]
+      q_l2: [-90, 45]
+      q_l3: [-90, 135]
+      q_l4: [-90, 90]
+      q_r1: [-90, 90]
+      q_r2: [-45, 90]
+      q_r3: [-135, 90]
+      q_r4: [-90, 90]
+      
+    position_control_mode:
+      p_gain_position: 5.0
+      d_gain_position: 0.2
+      i_gain_position: 0.0
+      iq_max: 1.5
+      p_gain_iq: 0.02
+      i_gain_iq: 0.02
+      d_gain_iq: 0.0
+      p_gain_id: 0.02
+      i_gain_id: 0.02
+      d_gain_id: 0.0
+      kt: 0.35
+      
+    current_control_mode:
+      p_gain_position: 0.0
+      d_gain_position: 0.0
+      i_gain_position: 0.0
+      p_gain_force: 0.0
+      d_gain_force: 0.0
+      i_gain_force: 0.0
+      iq_max: 3.0
+      p_gain_iq: 0.277
+      i_gain_iq: 0.061
+      d_gain_iq: 0.0
+      p_gain_id: 0.277
+      i_gain_id: 0.061
+      d_gain_id: 0.0
+      kt: 0.35
+      
+    right_arm_params:
+      m1: 0.361
+      m2: 0.400
+      m3: 0.452
+      m4: 0.181
+      d2: 0.113
+      a3: 0.123
+      rcx1: -0.0371
+      rcx2: -0.0154
+      rcy2: 0.0812
+      rcz2: -0.2084
+      rcy3: 0.1585
+      rcz3: 0.1687
+      rcx4: -0.1282
+      rcy4: -0.0039
+      rcz4: -0.4192
+      g: 9.81
+      
+    left_arm_params:
+      m1: 0.361
+      m2: 0.400
+      m3: 0.452
+      m4: 0.181
+      d2: 0.113
+      a3: 0.123
+      rcx1: -0.0264
+      rcx2: -0.0235
+      rcy2: -0.0609
+      rcz2: -0.0386
+      rcy3: 0.0150
+      rcz3: 0.0022
+      rcx4: -0.0228
+      rcy4: 0.0568
+      rcz4: -0.0279
+      g: 9.81 
