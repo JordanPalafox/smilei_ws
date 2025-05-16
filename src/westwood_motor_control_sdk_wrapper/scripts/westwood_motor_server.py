@@ -3,7 +3,7 @@
 import rclpy
 from rclpy.node import Node
 from westwood_motor_interfaces.srv import SetMotorIdAndTarget, GetMotorPositions, GetAvailableMotors
-from westwood_motor_interfaces.srv import SetGains, SetMode, SetTorqueEnable
+from westwood_motor_interfaces.srv import SetGains, SetMode, SetTorqueEnable, SetGoalIq
 import sys
 import os
 
@@ -134,6 +134,17 @@ class WestwoodMotorServer(Node):
             self.get_logger().info('Servicio para habilitar/deshabilitar torque registrado correctamente')
         except Exception as e:
             self.get_logger().error(f'Error al registrar servicio de habilitación de torque: {str(e)}')
+        
+        # Añadir servicio para establecer corriente iq objetivo
+        try:
+            self.set_goal_iq_service = self.create_service(
+                SetGoalIq,
+                'westwood_motor/set_goal_iq',
+                self.handle_set_goal_iq
+            )
+            self.get_logger().info('Servicio para establecer corriente iq objetivo registrado correctamente')
+        except Exception as e:
+            self.get_logger().error(f'Error al registrar servicio de establecimiento de corriente iq: {str(e)}')
         
     # Función principal para manejar IDs de motores y sus posiciones objetivo
     def handle_motor_ids_and_target(self, request, response):
@@ -699,6 +710,79 @@ class WestwoodMotorServer(Node):
         except Exception as e:
             import traceback
             self.get_logger().error(f'Error en servicio de configuración de torque: {str(e)}')
+            self.get_logger().error(traceback.format_exc())
+            response.success = False
+            response.message = f"Error: {str(e)}"
+            return response
+
+    # Función para establecer la corriente iq objetivo
+    def handle_set_goal_iq(self, request, response):
+        """Callback para establecer la corriente iq objetivo de los motores"""
+        try:
+            # Si no hay motores especificados, no hay nada que hacer
+            if not request.motor_ids or len(request.motor_ids) == 0:
+                response.success = False
+                response.message = "No se especificaron IDs de motores"
+                return response
+            
+            # Si la cantidad de motores no coincide con la cantidad de corrientes
+            if len(request.motor_ids) != len(request.goal_iq):
+                response.success = False
+                response.message = "La cantidad de IDs de motores no coincide con la cantidad de corrientes objetivo"
+                return response
+            
+            connected_motors = []
+            failed_motor_ids = []
+            
+            # Si el manager está disponible, intentamos configurar los motores reales
+            if self.manager is not None:
+                # Verificar conexión de cada motor
+                for motor_id in request.motor_ids:
+                    try:
+                        ping_result = self.manager.ping(motor_id)
+                        if ping_result:
+                            connected_motors.append(motor_id)
+                            self.get_logger().info(f'Motor {motor_id} conectado y listo para control de corriente')
+                        else:
+                            failed_motor_ids.append(motor_id)
+                            self.get_logger().warning(f'Motor {motor_id} no responde')
+                    except Exception as e:
+                        self.get_logger().error(f'Error al hacer ping al motor {motor_id}: {str(e)}')
+                        failed_motor_ids.append(motor_id)
+                
+                # Para cada motor conectado, establecer corriente
+                for i, motor_id in enumerate(connected_motors):
+                    if motor_id not in request.motor_ids:
+                        continue
+                    
+                    # Obtener el índice del motor en la lista original
+                    idx = request.motor_ids.index(motor_id)
+                    
+                    try:
+                        # Establecer corriente iq objetivo
+                        self.manager.set_goal_iq((motor_id, request.goal_iq[idx]))
+                        self.get_logger().info(f'Corriente iq objetivo {request.goal_iq[idx]} configurada para motor {motor_id}')
+                    except Exception as e:
+                        self.get_logger().error(f'Error al establecer corriente del motor {motor_id}: {str(e)}')
+                        if motor_id in connected_motors:
+                            connected_motors.remove(motor_id)
+                        failed_motor_ids.append(motor_id)
+            
+            # Preparar respuesta
+            if connected_motors:
+                response.success = True
+                response.message = f"Corriente iq configurada en {len(connected_motors)} motores"
+                if failed_motor_ids:
+                    response.message += f" ({len(failed_motor_ids)} fallaron)"
+            else:
+                response.success = False
+                response.message = "No se pudo configurar ningún motor"
+            
+            return response
+            
+        except Exception as e:
+            import traceback
+            self.get_logger().error(f'Error en servicio de establecimiento de corriente iq: {str(e)}')
             self.get_logger().error(traceback.format_exc())
             response.success = False
             response.message = f"Error: {str(e)}"
