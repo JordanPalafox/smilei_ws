@@ -1,0 +1,7 @@
+# Solicitud para configurar el modo de operación de los motores
+int32[] motor_ids       # IDs de los motores a configurar
+int32[] modes           # Modos de operación (0: corriente, 1: velocidad, 2: posición)
+---
+# Respuesta
+bool success            # Indica si la configuración fue exitosa
+string message          # Mensaje descriptivo del resultado 

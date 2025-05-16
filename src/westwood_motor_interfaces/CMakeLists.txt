@@ -18,6 +18,8 @@ set(srv_files
   "srv/GetMotorPositions.srv"
   "srv/GetAvailableMotors.srv"
   "srv/SetGains.srv"
+  "srv/SetMode.srv"
+  "srv/SetTorqueEnable.srv"
 )
 
 

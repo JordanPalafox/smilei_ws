@@ -1,0 +1,7 @@
+# Solicitud para habilitar/deshabilitar el torque de los motores
+int32[] motor_ids       # IDs de los motores a configurar
+bool[] enable_torque    # Estado del torque (true: habilitado, false: deshabilitado)
+---
+# Respuesta
+bool success            # Indica si la configuración fue exitosa
+string message          # Mensaje descriptivo del resultado 

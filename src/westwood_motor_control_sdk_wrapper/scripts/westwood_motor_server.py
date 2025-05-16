@@ -3,7 +3,7 @@
 import rclpy
 from rclpy.node import Node
 from westwood_motor_interfaces.srv import SetMotorIdAndTarget, GetMotorPositions, GetAvailableMotors
-from westwood_motor_interfaces.srv import SetGains
+from westwood_motor_interfaces.srv import SetGains, SetMode, SetTorqueEnable
 import sys
 import os
 
@@ -112,6 +112,28 @@ class WestwoodMotorServer(Node):
             self.get_logger().info('Servicio para configurar ganancias de corriente registrado correctamente')
         except Exception as e:
             self.get_logger().error(f'Error al registrar servicio de configuración de ganancias de corriente: {str(e)}')
+        
+        # Añadir servicio para configurar el modo de operación
+        try:
+            self.set_mode_service = self.create_service(
+                SetMode,
+                'westwood_motor/set_mode',
+                self.handle_set_mode
+            )
+            self.get_logger().info('Servicio para configurar el modo de operación registrado correctamente')
+        except Exception as e:
+            self.get_logger().error(f'Error al registrar servicio de configuración de modo: {str(e)}')
+        
+        # Añadir servicio para habilitar/deshabilitar el torque
+        try:
+            self.set_torque_enable_service = self.create_service(
+                SetTorqueEnable,
+                'westwood_motor/set_torque_enable',
+                self.handle_set_torque_enable
+            )
+            self.get_logger().info('Servicio para habilitar/deshabilitar torque registrado correctamente')
+        except Exception as e:
+            self.get_logger().error(f'Error al registrar servicio de habilitación de torque: {str(e)}')
         
     # Función principal para manejar IDs de motores y sus posiciones objetivo
     def handle_motor_ids_and_target(self, request, response):
@@ -527,6 +549,156 @@ class WestwoodMotorServer(Node):
         except Exception as e:
             import traceback
             self.get_logger().error(f'Error en servicio de configuración de ganancias: {str(e)}')
+            self.get_logger().error(traceback.format_exc())
+            response.success = False
+            response.message = f"Error: {str(e)}"
+            return response
+
+    # Función para configurar el modo de operación
+    def handle_set_mode(self, request, response):
+        """Callback para configurar el modo de operación de los motores"""
+        try:
+            # Si no hay motores o modos especificados, no hay nada que hacer
+            if not request.motor_ids or len(request.motor_ids) == 0:
+                response.success = False
+                response.message = "No se especificaron IDs de motores"
+                return response
+            
+            # Si la cantidad de motores no coincide con la cantidad de modos
+            if len(request.motor_ids) != len(request.modes):
+                response.success = False
+                response.message = "La cantidad de IDs de motores no coincide con la cantidad de modos"
+                return response
+            
+            connected_motors = []
+            failed_motor_ids = []
+            
+            # Si el manager está disponible, intentamos configurar los motores reales
+            if self.manager is not None:
+                # Verificar conexión de cada motor
+                for motor_id in request.motor_ids:
+                    try:
+                        ping_result = self.manager.ping(motor_id)
+                        if ping_result:
+                            connected_motors.append(motor_id)
+                            self.get_logger().info(f'Motor {motor_id} conectado y listo para configuración')
+                        else:
+                            failed_motor_ids.append(motor_id)
+                            self.get_logger().warning(f'Motor {motor_id} no responde')
+                    except Exception as e:
+                        self.get_logger().error(f'Error al hacer ping al motor {motor_id}: {str(e)}')
+                        failed_motor_ids.append(motor_id)
+                
+                # Para cada motor conectado, configurar el modo
+                for i, motor_id in enumerate(connected_motors):
+                    if motor_id not in request.motor_ids:
+                        continue
+                    
+                    # Obtener el índice del motor en la lista original
+                    idx = request.motor_ids.index(motor_id)
+                    
+                    try:
+                        # Establecer el modo
+                        self.manager.set_mode((motor_id, request.modes[idx]))
+                        self.get_logger().info(f'Modo {request.modes[idx]} configurado para motor {motor_id}')
+                    except Exception as e:
+                        self.get_logger().error(f'Error al configurar modo del motor {motor_id}: {str(e)}')
+                        if motor_id in connected_motors:
+                            connected_motors.remove(motor_id)
+                        failed_motor_ids.append(motor_id)
+            
+            # Preparar respuesta
+            if connected_motors:
+                response.success = True
+                response.message = f"Modo configurado en {len(connected_motors)} motores"
+                if failed_motor_ids:
+                    response.message += f" ({len(failed_motor_ids)} fallaron)"
+            else:
+                response.success = False
+                response.message = "No se pudo configurar ningún motor"
+            
+            return response
+            
+        except Exception as e:
+            import traceback
+            self.get_logger().error(f'Error en servicio de configuración de modo: {str(e)}')
+            self.get_logger().error(traceback.format_exc())
+            response.success = False
+            response.message = f"Error: {str(e)}"
+            return response
+    
+    # Función para habilitar/deshabilitar el torque
+    def handle_set_torque_enable(self, request, response):
+        """Callback para habilitar/deshabilitar el torque de los motores"""
+        try:
+            # Si no hay motores especificados, no hay nada que hacer
+            if not request.motor_ids or len(request.motor_ids) == 0:
+                response.success = False
+                response.message = "No se especificaron IDs de motores"
+                return response
+            
+            # Si la cantidad de motores no coincide con la cantidad de estados de torque
+            if len(request.motor_ids) != len(request.enable_torque):
+                response.success = False
+                response.message = "La cantidad de IDs de motores no coincide con la cantidad de estados de torque"
+                return response
+            
+            connected_motors = []
+            failed_motor_ids = []
+            
+            # Si el manager está disponible, intentamos configurar los motores reales
+            if self.manager is not None:
+                # Verificar conexión de cada motor
+                for motor_id in request.motor_ids:
+                    try:
+                        ping_result = self.manager.ping(motor_id)
+                        if ping_result:
+                            connected_motors.append(motor_id)
+                            self.get_logger().info(f'Motor {motor_id} conectado y listo para configuración')
+                        else:
+                            failed_motor_ids.append(motor_id)
+                            self.get_logger().warning(f'Motor {motor_id} no responde')
+                    except Exception as e:
+                        self.get_logger().error(f'Error al hacer ping al motor {motor_id}: {str(e)}')
+                        failed_motor_ids.append(motor_id)
+                
+                # Para cada motor conectado, configurar el torque
+                for i, motor_id in enumerate(connected_motors):
+                    if motor_id not in request.motor_ids:
+                        continue
+                    
+                    # Obtener el índice del motor en la lista original
+                    idx = request.motor_ids.index(motor_id)
+                    
+                    try:
+                        # Convertir bool a int (1: habilitado, 0: deshabilitado)
+                        torque_state = 1 if request.enable_torque[idx] else 0
+                        
+                        # Establecer el estado del torque
+                        self.manager.set_torque_enable((motor_id, torque_state))
+                        state_str = "habilitado" if torque_state == 1 else "deshabilitado"
+                        self.get_logger().info(f'Torque {state_str} para motor {motor_id}')
+                    except Exception as e:
+                        self.get_logger().error(f'Error al configurar torque del motor {motor_id}: {str(e)}')
+                        if motor_id in connected_motors:
+                            connected_motors.remove(motor_id)
+                        failed_motor_ids.append(motor_id)
+            
+            # Preparar respuesta
+            if connected_motors:
+                response.success = True
+                response.message = f"Torque configurado en {len(connected_motors)} motores"
+                if failed_motor_ids:
+                    response.message += f" ({len(failed_motor_ids)} fallaron)"
+            else:
+                response.success = False
+                response.message = "No se pudo configurar ningún motor"
+            
+            return response
+            
+        except Exception as e:
+            import traceback
+            self.get_logger().error(f'Error en servicio de configuración de torque: {str(e)}')
             self.get_logger().error(traceback.format_exc())
             response.success = False
             response.message = f"Error: {str(e)}"

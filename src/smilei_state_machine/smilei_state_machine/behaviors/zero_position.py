@@ -13,7 +13,7 @@ class ZeroPosition(py_trees.behaviour.Behaviour):
         self.future = None
         self.own_node = False
 
-    def setup(self, timeout_sec: float) -> bool:
+    def setup(self, timeout_sec=None, **kwargs) -> bool:
         # Usar el nodo proporcionado en lugar de crear uno nuevo
         if self.node is None:
             self.node = rclpy.create_node('zero_position_client')
@@ -25,6 +25,10 @@ class ZeroPosition(py_trees.behaviour.Behaviour):
             SetMotorIdAndTarget,
             'westwood_motor/set_motor_id_and_target'
         )
+        
+        if timeout_sec is None:
+            timeout_sec = 1.0
+            
         return self.client.wait_for_service(timeout_sec=timeout_sec)
 
     def initialise(self) -> None:
