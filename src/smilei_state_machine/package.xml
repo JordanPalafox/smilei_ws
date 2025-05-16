@@ -4,7 +4,7 @@
   <name>smilei_state_machine</name>
   <version>0.1.0</version>
   <description>Máquina de estados para el robot SMILEi usando py_trees</description>
-  <maintainer email="luistabarez96@gmail.com">Luis Tabarez</maintainer>
+  <maintainer email="a00835705@tec.mx">Jordan Palafox</maintainer>
   <license>Apache License 2.0</license>
 
   <depend>rclpy</depend>

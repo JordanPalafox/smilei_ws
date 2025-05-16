@@ -4,7 +4,7 @@
   <name>westwood_motor_interfaces</name>
   <version>0.1.0</version>
   <description>Interfaces personalizadas para el control de motores Westwood</description>
-  <maintainer email="user@example.com">User</maintainer>
+  <maintainer email="a00835705@tec.mx">Jordan Palafox</maintainer>
   <license>Apache License 2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
