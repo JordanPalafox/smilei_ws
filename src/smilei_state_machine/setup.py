@@ -24,7 +24,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'smilei_state_machine_node = smilei_state_machine.smilei_state_machine_node:main',
+            'state_machine = smilei_state_machine.state_machine:main',
+            'send_state_command = smilei_state_machine.send_state_command:main',
         ],
     },
 )
