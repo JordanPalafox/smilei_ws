@@ -201,7 +201,7 @@ def main():
     home = HomePosition(name="GoHome", motor_ids=motor_ids, node=node)
     zero = ZeroPosition(name="GoZero", motor_ids=motor_ids, node=node)
     say_hello = SayHello(name="SayHello", motor_ids=motor_ids, node=node)
-    teleoperation = LocalTeleoperation(name="LocalTeleoperation", motor_ids=motor_ids, node=node)
+    teleoperation = LocalTeleoperation(name="LocalTeleoperation", node=node)
     disable = DisableRobot(name="DisableRobot", motor_ids=motor_ids, node=node)
 
     # Crear comportamiento raíz personalizado
@@ -230,8 +230,8 @@ def main():
     try:
         while rclpy.ok():
             tree.tick()
-            node.get_logger().info(f"Estado actual: {current_state_command}, Completado: {last_completed_state}")
-            time.sleep(1.0)
+            node.get_logger().debug(f"Estado actual: {current_state_command}, Completado: {last_completed_state}")
+            time.sleep(0.1)  # Actualización más frecuente
     except KeyboardInterrupt:
         pass
     finally:
