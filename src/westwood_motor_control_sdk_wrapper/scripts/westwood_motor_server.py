@@ -33,31 +33,136 @@ class WestwoodMotorServer(Node):
         super().__init__('westwood_motor_server')
         self.get_logger().info('Westwood Motor Server started')
         
-        # Parámetros configurables - usando específicamente el puerto pybear_UB00E9
-        self.port = '/dev/pybear_UB00E9'  # Puerto fijo para asegurar que se use este dispositivo
+        # Initialize empty motor mapping for early service setup
+        self.motor_to_usb_map = {}
+        self.managers = []
+        
+        # Setup services early to ensure they are available
+        self.setup_services()
+        self.get_logger().info('✅ Servicios configurados temprano')
+        
+        # Parámetros configurables para dual USB
+        self.declare_parameter('usb_ports', ['/dev/ttyUSB0', '/dev/ttyUSB1'])
         self.declare_parameter('baudrate', 8000000)
-        self.declare_parameter('motor_ids', [1])
+        self.declare_parameter('motor_ids_usb0', [1, 2, 3, 4])  # Motors en USB0
+        self.declare_parameter('motor_ids_usb1', [5, 6, 7, 8])  # Motors en USB1 (IDs globales)
         self.declare_parameter('debug', False)
         
         # Obtener parámetros
+        self.usb_ports = self.get_parameter('usb_ports').value
         self.baudrate = self.get_parameter('baudrate').value
-        self.motor_ids = self.get_parameter('motor_ids').value
+        self.motor_ids_usb0 = self.get_parameter('motor_ids_usb0').value
+        self.motor_ids_usb1 = self.get_parameter('motor_ids_usb1').value
         self.debug = self.get_parameter('debug').value
         
-        # Inicializar el Manager de PyBear
-        try:
-            self.get_logger().info(f'Intentando conectar al puerto: {self.port}')
-            self.manager = Manager(
-                port=self.port,
-                baudrate=self.baudrate,
-                debug=self.debug
-            )
-            self.get_logger().info('Manager de PyBear inicializado correctamente')
-            self.get_logger().info(f'Puerto: {self.port}, Baudrate: {self.baudrate}')
-        except Exception as e:
-            self.get_logger().error(f'Error al inicializar Manager de PyBear: {str(e)}')
-            self.manager = None
+        # Crear mapeo de motor ID a USB y manager
+        self.motor_to_usb_map = {}
+        self.usb_to_manager_map = {}
         
+        # Inicializar managers para cada USB con timeout
+        self.managers = []
+        for i, port in enumerate(self.usb_ports):
+            manager = None
+            try:
+                self.get_logger().info(f'Intentando conectar al puerto: {port}')
+                
+                # Verificar si el puerto existe antes de intentar conectar
+                import os
+                if not os.path.exists(port):
+                    self.get_logger().warning(f'Puerto {port} no existe, saltando...')
+                    self.managers.append(None)
+                    continue
+                
+                # Intentar inicializar manager con timeout implícito
+                manager = Manager(
+                    port=port,
+                    baudrate=self.baudrate,
+                    debug=self.debug
+                )
+                
+                # Hacer un ping rápido para verificar que la comunicación funciona
+                test_ping = manager.ping(1)  # Ping rápido para verificar comunicación
+                
+                self.managers.append(manager)
+                self.usb_to_manager_map[i] = manager
+                
+                self.get_logger().info(f'✅ Manager de PyBear inicializado correctamente para {port}')
+                self.get_logger().info(f'Puerto: {port}, Baudrate: {self.baudrate}')
+                
+                # Crear mapeo de IDs a USB solo si el manager se inicializó correctamente
+                if i == 0:  # USB0
+                    for motor_id in self.motor_ids_usb0:
+                        self.motor_to_usb_map[motor_id] = {'usb_index': 0, 'local_id': motor_id, 'manager': manager}
+                elif i == 1:  # USB1
+                    for global_id, local_id in zip(self.motor_ids_usb1, [1, 2, 3, 4]):
+                        self.motor_to_usb_map[global_id] = {'usb_index': 1, 'local_id': local_id, 'manager': manager}
+                        
+            except Exception as e:
+                self.get_logger().error(f'❌ Error al inicializar Manager para {port}: {str(e)}')
+                if manager is not None:
+                    try:
+                        manager.close()
+                    except:
+                        pass
+                self.managers.append(None)
+                
+                # Si es el primer USB y falla, crear mapeo vacío para evitar errores
+                if i == 0:
+                    self.get_logger().warning(f'USB0 falló, pero continuando con inicialización...')
+                elif i == 1:
+                    self.get_logger().warning(f'USB1 falló, pero continuando con inicialización...')
+        
+        # Mantener compatibilidad con código existente
+        self.manager = None
+        for manager in self.managers:
+            if manager is not None:
+                self.manager = manager
+                break
+        
+        # Logging del estado de inicialización
+        working_managers = sum(1 for m in self.managers if m is not None)
+        self.get_logger().info(f'📊 Managers inicializados: {working_managers}/{len(self.usb_ports)}')
+        
+        if working_managers == 0:
+            self.get_logger().warning('⚠️ No se pudo inicializar ningún manager USB - funcionando en modo simulación')
+        else:
+            self.get_logger().info(f'✅ Sistema listo con {working_managers} USB(s) funcional(es)')
+        
+        self.get_logger().info(f'🗺️ Mapeo de motores: {self.motor_to_usb_map}')
+        
+        self.get_logger().info('DEBUG: Punto de control antes de servicios')
+        # Continuar con la inicialización de servicios independientemente del estado de USB
+        self.get_logger().info('🚀 Iniciando configuración de servicios...')
+        try:
+            self.setup_services()
+            self.get_logger().info('✅ Configuración de servicios completada')
+        except Exception as e:
+            self.get_logger().error(f'❌ Error al configurar servicios: {str(e)}')
+            import traceback
+            self.get_logger().error(traceback.format_exc())
+    
+    def get_manager_for_motor(self, motor_id):
+        """Obtener el manager correcto para un motor ID dado"""
+        if motor_id in self.motor_to_usb_map:
+            return self.motor_to_usb_map[motor_id]['manager'], self.motor_to_usb_map[motor_id]['local_id']
+        return None, motor_id
+    
+    def ping_motor(self, motor_id):
+        """Hacer ping a un motor específico usando el manager correcto"""
+        manager, local_id = self.get_manager_for_motor(motor_id)
+        if manager is None:
+            return False
+        try:
+            return manager.ping(local_id)
+        except Exception:
+            return False
+    
+    def get_all_motor_ids(self):
+        """Obtener todos los IDs de motores configurados"""
+        return list(self.motor_to_usb_map.keys())
+    
+    def setup_services(self):
+        """Configurar todos los servicios ROS2"""
         # Añadir el servicio para manejar múltiples motores con posiciones
         try:
             self.set_motor_id_and_target_service = self.create_service(
@@ -166,81 +271,88 @@ class WestwoodMotorServer(Node):
             failed_motor_ids = []
             previous_positions = []
             
-            # Si el manager está disponible, intentamos mover los motores reales
-            if self.manager is not None:
-                # Verificar conexión de cada motor y preparar lista de motores conectados
-                for motor_id in request.motor_ids:
-                    try:
-                        ping_result = self.manager.ping(motor_id)
-                        if ping_result:
-                            connected_motors.append(motor_id)
-                            self.get_logger().info(f'Motor {motor_id} conectado y listo para control')
-                        else:
-                            failed_motor_ids.append(motor_id)
-                            self.get_logger().warning(f'Motor {motor_id} no responde')
-                    except Exception as e:
-                        self.get_logger().error(f'Error al hacer ping al motor {motor_id}: {str(e)}')
+            # Verificar conexión de cada motor usando el manager correcto
+            for motor_id in request.motor_ids:
+                try:
+                    ping_result = self.ping_motor(motor_id)
+                    if ping_result:
+                        connected_motors.append(motor_id)
+                        self.get_logger().info(f'Motor {motor_id} conectado y listo para control')
+                    else:
                         failed_motor_ids.append(motor_id)
+                        self.get_logger().warning(f'Motor {motor_id} no responde')
+                except Exception as e:
+                    self.get_logger().error(f'Error al hacer ping al motor {motor_id}: {str(e)}')
+                    failed_motor_ids.append(motor_id)
                 
-                # Para cada motor conectado, configurar y mover
-                for i, motor_id in enumerate(connected_motors):
-                    if motor_id not in request.motor_ids:
-                        continue
-                    
-                    # Obtener el índice del motor en la lista original
-                    idx = request.motor_ids.index(motor_id)
-                    
-                    try:
-                        # Leer posición actual y guardarla
-                        current_position_result = self.manager.get_present_position(motor_id)
-                        if current_position_result and len(current_position_result) > 0:
-                            current_position = float(current_position_result[0][0][0])
-                            previous_positions.append(current_position)
-                            
-                            # Configurar PID para el control de posición
-                            # PID id/iq
-                            self.manager.set_p_gain_iq((motor_id, 0.02))
-                            self.manager.set_i_gain_iq((motor_id, 0.02))
-                            self.manager.set_d_gain_iq((motor_id, 0))
-                            self.manager.set_p_gain_id((motor_id, 0.02))
-                            self.manager.set_i_gain_id((motor_id, 0.02))
-                            self.manager.set_d_gain_id((motor_id, 0))
-                            
-                            # PID position mode
-                            p_gain = 5.0
-                            d_gain = 0.2
-                            i_gain = 0.0
-                            self.manager.set_p_gain_position((motor_id, p_gain))
-                            self.manager.set_i_gain_position((motor_id, i_gain))
-                            self.manager.set_d_gain_position((motor_id, d_gain))
-                            
-                            # Poner en modo posición
-                            self.manager.set_mode((motor_id, 2))
-                            
-                            # Establecer límite de corriente
-                            iq_max = 1.5
-                            self.manager.set_limit_iq_max((motor_id, iq_max))
-                            
-                            # Establecer posición inicial antes de habilitar torque
-                            self.manager.set_goal_position((motor_id, current_position))
-                            
-                            # Habilitar torque
-                            self.manager.set_torque_enable((motor_id, 1))
-                            
-                            # Mover a la posición objetivo
-                            target_position = request.target_positions[idx]
-                            self.manager.set_goal_position((motor_id, target_position))
-                            self.get_logger().info(f'Motor {motor_id} movido a {target_position} radianes')
-                        else:
-                            previous_positions.append(0.0)
-                            failed_motor_ids.append(motor_id)
-                            self.get_logger().warning(f'No se pudo leer la posición actual del motor {motor_id}')
-                    except Exception as e:
-                        self.get_logger().error(f'Error al configurar/mover motor {motor_id}: {str(e)}')
-                        if motor_id in connected_motors:
-                            connected_motors.remove(motor_id)
-                        failed_motor_ids.append(motor_id)
+            # Para cada motor conectado, configurar y mover
+            for i, motor_id in enumerate(connected_motors):
+                if motor_id not in request.motor_ids:
+                    continue
+                
+                # Obtener el índice del motor en la lista original
+                idx = request.motor_ids.index(motor_id)
+                
+                # Obtener el manager correcto para este motor
+                manager, local_id = self.get_manager_for_motor(motor_id)
+                
+                if manager is None:
+                    self.get_logger().error(f'No se encontró manager para motor {motor_id}')
+                    failed_motor_ids.append(motor_id)
+                    previous_positions.append(0.0)
+                    continue
+                
+                try:
+                    # Leer posición actual y guardarla
+                    current_position_result = manager.get_present_position(local_id)
+                    if current_position_result and len(current_position_result) > 0:
+                        current_position = float(current_position_result[0][0][0])
+                        previous_positions.append(current_position)
+                        
+                        # Configurar PID para el control de posición
+                        # PID id/iq
+                        manager.set_p_gain_iq((local_id, 0.02))
+                        manager.set_i_gain_iq((local_id, 0.02))
+                        manager.set_d_gain_iq((local_id, 0))
+                        manager.set_p_gain_id((local_id, 0.02))
+                        manager.set_i_gain_id((local_id, 0.02))
+                        manager.set_d_gain_id((local_id, 0))
+                        
+                        # PID position mode
+                        p_gain = 5.0
+                        d_gain = 0.2
+                        i_gain = 0.0
+                        manager.set_p_gain_position((local_id, p_gain))
+                        manager.set_i_gain_position((local_id, i_gain))
+                        manager.set_d_gain_position((local_id, d_gain))
+                        
+                        # Poner en modo posición
+                        manager.set_mode((local_id, 2))
+                        
+                        # Establecer límite de corriente
+                        iq_max = 1.5
+                        manager.set_limit_iq_max((local_id, iq_max))
+                        
+                        # Establecer posición inicial antes de habilitar torque
+                        manager.set_goal_position((local_id, current_position))
+                        
+                        # Habilitar torque
+                        manager.set_torque_enable((local_id, 1))
+                        
+                        # Mover a la posición objetivo
+                        target_position = request.target_positions[idx]
+                        manager.set_goal_position((local_id, target_position))
+                        self.get_logger().info(f'Motor {motor_id} (local {local_id}) movido a {target_position} radianes')
+                    else:
                         previous_positions.append(0.0)
+                        failed_motor_ids.append(motor_id)
+                        self.get_logger().warning(f'No se pudo leer la posición actual del motor {motor_id}')
+                except Exception as e:
+                    self.get_logger().error(f'Error al configurar/mover motor {motor_id}: {str(e)}')
+                    if motor_id in connected_motors:
+                        connected_motors.remove(motor_id)
+                    failed_motor_ids.append(motor_id)
+                    previous_positions.append(0.0)
             
             # Si no hay motores conectados o hay errores, simulamos la respuesta
             if not connected_motors:
@@ -280,40 +392,47 @@ class WestwoodMotorServer(Node):
     def handle_get_motor_positions(self, request, response):
         """Callback para obtener las posiciones actuales de los motores especificados"""
         try:
-            # Si no hay motores especificados, utilizar la lista configurada
+            # Si no hay motores especificados, utilizar todos los motores configurados
             motor_ids = request.motor_ids
             if not motor_ids or len(motor_ids) == 0:
-                motor_ids = self.motor_ids
+                motor_ids = self.get_all_motor_ids()
                 
             positions = []
             connected_motors = []
             failed_motor_ids = []
             
-            # Intenta obtener posiciones reales si el manager está disponible
-            if self.manager is not None:
-                for motor_id in motor_ids:
-                    try:
-                        ping_result = self.manager.ping(motor_id)
-                        if ping_result:
-                            connected_motors.append(motor_id)
-                            # Obtener posición actual del motor
-                            position_result = self.manager.get_present_position(motor_id)
-                            if position_result and len(position_result) > 0:
-                                current_position = float(position_result[0][0][0])
-                                positions.append(current_position)
-                                self.get_logger().info(f'Motor {motor_id}: posición actual {current_position}')
-                            else:
-                                positions.append(0.0)  # Valor por defecto si no se pudo leer
-                                failed_motor_ids.append(motor_id)
-                                self.get_logger().warning(f'No se pudo leer la posición del motor {motor_id}')
+            # Intentar obtener posiciones reales
+            for motor_id in motor_ids:
+                manager, local_id = self.get_manager_for_motor(motor_id)
+                
+                if manager is None:
+                    failed_motor_ids.append(motor_id)
+                    positions.append(0.0)
+                    self.get_logger().warning(f'No se encontró manager para motor {motor_id}')
+                    continue
+                
+                try:
+                    ping_result = self.ping_motor(motor_id)
+                    if ping_result:
+                        connected_motors.append(motor_id)
+                        # Obtener posición actual del motor
+                        position_result = manager.get_present_position(local_id)
+                        if position_result and len(position_result) > 0:
+                            current_position = float(position_result[0][0][0])
+                            positions.append(current_position)
+                            self.get_logger().info(f'Motor {motor_id} (local {local_id}): posición actual {current_position}')
                         else:
+                            positions.append(0.0)  # Valor por defecto si no se pudo leer
                             failed_motor_ids.append(motor_id)
-                            positions.append(0.0)  # Valor por defecto para motores desconectados
-                            self.get_logger().warning(f'Motor {motor_id} no responde')
-                    except Exception as e:
-                        self.get_logger().error(f'Error al leer posición del motor {motor_id}: {str(e)}')
+                            self.get_logger().warning(f'No se pudo leer la posición del motor {motor_id}')
+                    else:
                         failed_motor_ids.append(motor_id)
-                        positions.append(0.0)
+                        positions.append(0.0)  # Valor por defecto para motores desconectados
+                        self.get_logger().warning(f'Motor {motor_id} no responde')
+                except Exception as e:
+                    self.get_logger().error(f'Error al leer posición del motor {motor_id}: {str(e)}')
+                    failed_motor_ids.append(motor_id)
+                    positions.append(0.0)
             
             # Si no pudimos obtener posiciones reales, enviamos valores simulados
             if not positions:
@@ -346,32 +465,31 @@ class WestwoodMotorServer(Node):
         try:
             available_motors = []
             
-            # Verificar si manager está inicializado
-            if self.manager is None:
-                self.get_logger().error('Error: Manager es None, no hay conexión establecida')
-                # Incluso si no hay conexión, devolvemos al menos un motor por defecto
-                available_motors = [1]
+            # Verificar si hay managers inicializados
+            if not self.managers or all(m is None for m in self.managers):
+                self.get_logger().error('Error: No hay managers inicializados')
+                # Incluso si no hay conexión, devolvemos los motores configurados
+                available_motors = self.get_all_motor_ids()
                 response.success = True
-                response.message = "Modo simulación: usando motor virtual ID 1"
+                response.message = "Modo simulación: usando motores virtuales"
                 response.motor_ids = available_motors
                 self.get_logger().info(f'Usando motores virtuales: {available_motors}')
                 return response
             
-            # Intentar obtener motores reales
+            # Intentar obtener motores reales escaneando los IDs configurados
             try:
-                # Primero intenta hacer ping a algunos motores (1-3)
-                max_id_to_scan = 10
+                configured_motor_ids = self.get_all_motor_ids()
                 
-                for motor_id in range(1, max_id_to_scan + 1):
+                for motor_id in configured_motor_ids:
                     try:
                         self.get_logger().info(f'Probando motor ID: {motor_id}')
-                        ping_result = self.manager.ping(motor_id)
+                        ping_result = self.ping_motor(motor_id)
                         
-                        if ping_result and ping_result[0] is not None:
-                            self.get_logger().info(f'Motor detectado en ID: {motor_id}, respuesta: {ping_result}')
+                        if ping_result:
+                            self.get_logger().info(f'Motor detectado en ID: {motor_id}')
                             available_motors.append(motor_id)
                         else:
-                            self.get_logger().info(f'No se encontró motor en ID: {motor_id}, respuesta: {ping_result}')
+                            self.get_logger().info(f'No se encontró motor en ID: {motor_id}')
                     except Exception as e:
                         self.get_logger().warning(f'Error al hacer ping al motor {motor_id}: {str(e)}')
             except Exception as e:
@@ -419,47 +537,44 @@ class WestwoodMotorServer(Node):
             connected_motors = []
             failed_motor_ids = []
             
-            # Si el manager está disponible, intentamos configurar los motores reales
-            if self.manager is not None:
-                # Verificar conexión de cada motor
-                for motor_id in request.motor_ids:
-                    try:
-                        ping_result = self.manager.ping(motor_id)
-                        if ping_result:
-                            connected_motors.append(motor_id)
-                            self.get_logger().info(f'Motor {motor_id} conectado y listo para configuración')
-                        else:
-                            failed_motor_ids.append(motor_id)
-                            self.get_logger().warning(f'Motor {motor_id} no responde')
-                    except Exception as e:
-                        self.get_logger().error(f'Error al hacer ping al motor {motor_id}: {str(e)}')
-                        failed_motor_ids.append(motor_id)
+            # Verificar conexión de cada motor y configurar las ganancias
+            for motor_id in request.motor_ids:
+                manager, local_id = self.get_manager_for_motor(motor_id)
                 
-                # Para cada motor conectado, configurar las ganancias
-                for motor_id in connected_motors:
-                    try:
+                if manager is None:
+                    failed_motor_ids.append(motor_id)
+                    self.get_logger().warning(f'No se encontró manager para motor {motor_id}')
+                    continue
+                
+                try:
+                    ping_result = self.ping_motor(motor_id)
+                    if ping_result:
+                        connected_motors.append(motor_id)
+                        self.get_logger().info(f'Motor {motor_id} conectado y listo para configuración')
+                        
                         # Configurar PID para modo posición
-                        self.manager.set_p_gain_position((motor_id, request.p_gain_position))
-                        self.manager.set_i_gain_position((motor_id, request.i_gain_position))
-                        self.manager.set_d_gain_position((motor_id, request.d_gain_position))
+                        manager.set_p_gain_position((local_id, request.p_gain_position))
+                        manager.set_i_gain_position((local_id, request.i_gain_position))
+                        manager.set_d_gain_position((local_id, request.d_gain_position))
                         
                         # Configurar PID para modo corriente (iq/id)
-                        self.manager.set_p_gain_iq((motor_id, request.p_gain_iq))
-                        self.manager.set_i_gain_iq((motor_id, request.i_gain_iq))
-                        self.manager.set_d_gain_iq((motor_id, request.d_gain_iq))
-                        self.manager.set_p_gain_id((motor_id, request.p_gain_id))
-                        self.manager.set_i_gain_id((motor_id, request.i_gain_id))
-                        self.manager.set_d_gain_id((motor_id, request.d_gain_id))
+                        manager.set_p_gain_iq((local_id, request.p_gain_iq))
+                        manager.set_i_gain_iq((local_id, request.i_gain_iq))
+                        manager.set_d_gain_iq((local_id, request.d_gain_iq))
+                        manager.set_p_gain_id((local_id, request.p_gain_id))
+                        manager.set_i_gain_id((local_id, request.i_gain_id))
+                        manager.set_d_gain_id((local_id, request.d_gain_id))
                         
                         # Establecer límite de corriente
-                        self.manager.set_limit_iq_max((motor_id, request.iq_max))
+                        manager.set_limit_iq_max((local_id, request.iq_max))
                         
-                        self.get_logger().info(f'Ganancias de posición configuradas para motor {motor_id}')
-                    except Exception as e:
-                        self.get_logger().error(f'Error al configurar ganancias del motor {motor_id}: {str(e)}')
-                        if motor_id in connected_motors:
-                            connected_motors.remove(motor_id)
+                        self.get_logger().info(f'Ganancias de posición configuradas para motor {motor_id} (local {local_id})')
+                    else:
                         failed_motor_ids.append(motor_id)
+                        self.get_logger().warning(f'Motor {motor_id} no responde')
+                except Exception as e:
+                    self.get_logger().error(f'Error al configurar ganancias del motor {motor_id}: {str(e)}')
+                    failed_motor_ids.append(motor_id)
             
             # Preparar respuesta
             if connected_motors:
@@ -494,56 +609,53 @@ class WestwoodMotorServer(Node):
             connected_motors = []
             failed_motor_ids = []
             
-            # Si el manager está disponible, intentamos configurar los motores reales
-            if self.manager is not None:
-                # Verificar conexión de cada motor
-                for motor_id in request.motor_ids:
-                    try:
-                        ping_result = self.manager.ping(motor_id)
-                        if ping_result:
-                            connected_motors.append(motor_id)
-                            self.get_logger().info(f'Motor {motor_id} conectado y listo para configuración')
-                        else:
-                            failed_motor_ids.append(motor_id)
-                            self.get_logger().warning(f'Motor {motor_id} no responde')
-                    except Exception as e:
-                        self.get_logger().error(f'Error al hacer ping al motor {motor_id}: {str(e)}')
-                        failed_motor_ids.append(motor_id)
+            # Verificar conexión de cada motor y configurar las ganancias
+            for motor_id in request.motor_ids:
+                manager, local_id = self.get_manager_for_motor(motor_id)
                 
-                # Para cada motor conectado, configurar las ganancias
-                for motor_id in connected_motors:
-                    try:
+                if manager is None:
+                    failed_motor_ids.append(motor_id)
+                    self.get_logger().warning(f'No se encontró manager para motor {motor_id}')
+                    continue
+                
+                try:
+                    ping_result = self.ping_motor(motor_id)
+                    if ping_result:
+                        connected_motors.append(motor_id)
+                        self.get_logger().info(f'Motor {motor_id} conectado y listo para configuración')
+                        
                         # Configurar PID para modo posición (a cero en modo corriente)
-                        self.manager.set_p_gain_position((motor_id, 0.0))
-                        self.manager.set_i_gain_position((motor_id, 0.0))
-                        self.manager.set_d_gain_position((motor_id, 0.0))
+                        manager.set_p_gain_position((local_id, 0.0))
+                        manager.set_i_gain_position((local_id, 0.0))
+                        manager.set_d_gain_position((local_id, 0.0))
                         
                         # Configurar PID para modo corriente (iq/id)
-                        self.manager.set_p_gain_iq((motor_id, request.p_gain_iq))
-                        self.manager.set_i_gain_iq((motor_id, request.i_gain_iq))
-                        self.manager.set_d_gain_iq((motor_id, request.d_gain_iq))
-                        self.manager.set_p_gain_id((motor_id, request.p_gain_id))
-                        self.manager.set_i_gain_id((motor_id, request.i_gain_id))
-                        self.manager.set_d_gain_id((motor_id, request.d_gain_id))
+                        manager.set_p_gain_iq((local_id, request.p_gain_iq))
+                        manager.set_i_gain_iq((local_id, request.i_gain_iq))
+                        manager.set_d_gain_iq((local_id, request.d_gain_iq))
+                        manager.set_p_gain_id((local_id, request.p_gain_id))
+                        manager.set_i_gain_id((local_id, request.i_gain_id))
+                        manager.set_d_gain_id((local_id, request.d_gain_id))
                         
                         # Configurar PID para modo fuerza (si existe)
-                        if hasattr(self.manager, 'set_p_gain_force'):
-                            self.manager.set_p_gain_force((motor_id, request.p_gain_force))
-                            self.manager.set_i_gain_force((motor_id, request.i_gain_force))
-                            self.manager.set_d_gain_force((motor_id, request.d_gain_force))
+                        if hasattr(manager, 'set_p_gain_force'):
+                            manager.set_p_gain_force((local_id, request.p_gain_force))
+                            manager.set_i_gain_force((local_id, request.i_gain_force))
+                            manager.set_d_gain_force((local_id, request.d_gain_force))
                         
                         # Establecer límite de corriente
-                        self.manager.set_limit_iq_max((motor_id, request.iq_max))
+                        manager.set_limit_iq_max((local_id, request.iq_max))
                         
                         # Cambiar a modo corriente (0)
-                        self.manager.set_mode((motor_id, 0))
+                        manager.set_mode((local_id, 0))
                         
-                        self.get_logger().info(f'Ganancias de corriente configuradas para motor {motor_id}')
-                    except Exception as e:
-                        self.get_logger().error(f'Error al configurar ganancias del motor {motor_id}: {str(e)}')
-                        if motor_id in connected_motors:
-                            connected_motors.remove(motor_id)
+                        self.get_logger().info(f'Ganancias de corriente configuradas para motor {motor_id} (local {local_id})')
+                    else:
                         failed_motor_ids.append(motor_id)
+                        self.get_logger().warning(f'Motor {motor_id} no responde')
+                except Exception as e:
+                    self.get_logger().error(f'Error al configurar ganancias del motor {motor_id}: {str(e)}')
+                    failed_motor_ids.append(motor_id)
             
             # Preparar respuesta
             if connected_motors:
@@ -584,39 +696,33 @@ class WestwoodMotorServer(Node):
             connected_motors = []
             failed_motor_ids = []
             
-            # Si el manager está disponible, intentamos configurar los motores reales
-            if self.manager is not None:
-                # Verificar conexión de cada motor
-                for motor_id in request.motor_ids:
-                    try:
-                        ping_result = self.manager.ping(motor_id)
-                        if ping_result:
-                            connected_motors.append(motor_id)
-                            self.get_logger().info(f'Motor {motor_id} conectado y listo para configuración')
-                        else:
-                            failed_motor_ids.append(motor_id)
-                            self.get_logger().warning(f'Motor {motor_id} no responde')
-                    except Exception as e:
-                        self.get_logger().error(f'Error al hacer ping al motor {motor_id}: {str(e)}')
-                        failed_motor_ids.append(motor_id)
+            # Configurar el modo para cada motor
+            for motor_id in request.motor_ids:
+                manager, local_id = self.get_manager_for_motor(motor_id)
                 
-                # Para cada motor conectado, configurar el modo
-                for i, motor_id in enumerate(connected_motors):
-                    if motor_id not in request.motor_ids:
-                        continue
-                    
-                    # Obtener el índice del motor en la lista original
-                    idx = request.motor_ids.index(motor_id)
-                    
-                    try:
+                if manager is None:
+                    failed_motor_ids.append(motor_id)
+                    self.get_logger().warning(f'No se encontró manager para motor {motor_id}')
+                    continue
+                
+                # Obtener el índice del motor en la lista original
+                idx = request.motor_ids.index(motor_id)
+                
+                try:
+                    ping_result = self.ping_motor(motor_id)
+                    if ping_result:
+                        connected_motors.append(motor_id)
+                        self.get_logger().info(f'Motor {motor_id} conectado y listo para configuración')
+                        
                         # Establecer el modo
-                        self.manager.set_mode((motor_id, request.modes[idx]))
-                        self.get_logger().info(f'Modo {request.modes[idx]} configurado para motor {motor_id}')
-                    except Exception as e:
-                        self.get_logger().error(f'Error al configurar modo del motor {motor_id}: {str(e)}')
-                        if motor_id in connected_motors:
-                            connected_motors.remove(motor_id)
+                        manager.set_mode((local_id, request.modes[idx]))
+                        self.get_logger().info(f'Modo {request.modes[idx]} configurado para motor {motor_id} (local {local_id})')
+                    else:
                         failed_motor_ids.append(motor_id)
+                        self.get_logger().warning(f'Motor {motor_id} no responde')
+                except Exception as e:
+                    self.get_logger().error(f'Error al configurar modo del motor {motor_id}: {str(e)}')
+                    failed_motor_ids.append(motor_id)
             
             # Preparar respuesta
             if connected_motors:
@@ -657,43 +763,37 @@ class WestwoodMotorServer(Node):
             connected_motors = []
             failed_motor_ids = []
             
-            # Si el manager está disponible, intentamos configurar los motores reales
-            if self.manager is not None:
-                # Verificar conexión de cada motor
-                for motor_id in request.motor_ids:
-                    try:
-                        ping_result = self.manager.ping(motor_id)
-                        if ping_result:
-                            connected_motors.append(motor_id)
-                            self.get_logger().info(f'Motor {motor_id} conectado y listo para configuración')
-                        else:
-                            failed_motor_ids.append(motor_id)
-                            self.get_logger().warning(f'Motor {motor_id} no responde')
-                    except Exception as e:
-                        self.get_logger().error(f'Error al hacer ping al motor {motor_id}: {str(e)}')
-                        failed_motor_ids.append(motor_id)
+            # Configurar el torque para cada motor
+            for motor_id in request.motor_ids:
+                manager, local_id = self.get_manager_for_motor(motor_id)
                 
-                # Para cada motor conectado, configurar el torque
-                for i, motor_id in enumerate(connected_motors):
-                    if motor_id not in request.motor_ids:
-                        continue
-                    
-                    # Obtener el índice del motor en la lista original
-                    idx = request.motor_ids.index(motor_id)
-                    
-                    try:
+                if manager is None:
+                    failed_motor_ids.append(motor_id)
+                    self.get_logger().warning(f'No se encontró manager para motor {motor_id}')
+                    continue
+                
+                # Obtener el índice del motor en la lista original
+                idx = request.motor_ids.index(motor_id)
+                
+                try:
+                    ping_result = self.ping_motor(motor_id)
+                    if ping_result:
+                        connected_motors.append(motor_id)
+                        self.get_logger().info(f'Motor {motor_id} conectado y listo para configuración')
+                        
                         # Convertir bool a int (1: habilitado, 0: deshabilitado)
                         torque_state = 1 if request.enable_torque[idx] else 0
                         
                         # Establecer el estado del torque
-                        self.manager.set_torque_enable((motor_id, torque_state))
+                        manager.set_torque_enable((local_id, torque_state))
                         state_str = "habilitado" if torque_state == 1 else "deshabilitado"
-                        self.get_logger().info(f'Torque {state_str} para motor {motor_id}')
-                    except Exception as e:
-                        self.get_logger().error(f'Error al configurar torque del motor {motor_id}: {str(e)}')
-                        if motor_id in connected_motors:
-                            connected_motors.remove(motor_id)
+                        self.get_logger().info(f'Torque {state_str} para motor {motor_id} (local {local_id})')
+                    else:
                         failed_motor_ids.append(motor_id)
+                        self.get_logger().warning(f'Motor {motor_id} no responde')
+                except Exception as e:
+                    self.get_logger().error(f'Error al configurar torque del motor {motor_id}: {str(e)}')
+                    failed_motor_ids.append(motor_id)
             
             # Preparar respuesta
             if connected_motors:
@@ -734,39 +834,33 @@ class WestwoodMotorServer(Node):
             connected_motors = []
             failed_motor_ids = []
             
-            # Si el manager está disponible, intentamos configurar los motores reales
-            if self.manager is not None:
-                # Verificar conexión de cada motor
-                for motor_id in request.motor_ids:
-                    try:
-                        ping_result = self.manager.ping(motor_id)
-                        if ping_result:
-                            connected_motors.append(motor_id)
-                            self.get_logger().info(f'Motor {motor_id} conectado y listo para control de corriente')
-                        else:
-                            failed_motor_ids.append(motor_id)
-                            self.get_logger().warning(f'Motor {motor_id} no responde')
-                    except Exception as e:
-                        self.get_logger().error(f'Error al hacer ping al motor {motor_id}: {str(e)}')
-                        failed_motor_ids.append(motor_id)
+            # Establecer corriente para cada motor
+            for motor_id in request.motor_ids:
+                manager, local_id = self.get_manager_for_motor(motor_id)
                 
-                # Para cada motor conectado, establecer corriente
-                for i, motor_id in enumerate(connected_motors):
-                    if motor_id not in request.motor_ids:
-                        continue
-                    
-                    # Obtener el índice del motor en la lista original
-                    idx = request.motor_ids.index(motor_id)
-                    
-                    try:
+                if manager is None:
+                    failed_motor_ids.append(motor_id)
+                    self.get_logger().warning(f'No se encontró manager para motor {motor_id}')
+                    continue
+                
+                # Obtener el índice del motor en la lista original
+                idx = request.motor_ids.index(motor_id)
+                
+                try:
+                    ping_result = self.ping_motor(motor_id)
+                    if ping_result:
+                        connected_motors.append(motor_id)
+                        self.get_logger().info(f'Motor {motor_id} conectado y listo para control de corriente')
+                        
                         # Establecer corriente iq objetivo
-                        self.manager.set_goal_iq((motor_id, request.goal_iq[idx]))
-                        self.get_logger().info(f'Corriente iq objetivo {request.goal_iq[idx]} configurada para motor {motor_id}')
-                    except Exception as e:
-                        self.get_logger().error(f'Error al establecer corriente del motor {motor_id}: {str(e)}')
-                        if motor_id in connected_motors:
-                            connected_motors.remove(motor_id)
+                        manager.set_goal_iq((local_id, request.goal_iq[idx]))
+                        self.get_logger().info(f'Corriente iq objetivo {request.goal_iq[idx]} configurada para motor {motor_id} (local {local_id})')
+                    else:
                         failed_motor_ids.append(motor_id)
+                        self.get_logger().warning(f'Motor {motor_id} no responde')
+                except Exception as e:
+                    self.get_logger().error(f'Error al establecer corriente del motor {motor_id}: {str(e)}')
+                    failed_motor_ids.append(motor_id)
             
             # Preparar respuesta
             if connected_motors:
@@ -800,7 +894,17 @@ def main():
         import traceback
         print(traceback.format_exc())
     finally:
-        if hasattr(node, 'manager') and node.manager is not None:
+        # Cerrar todos los managers
+        if hasattr(node, 'managers'):
+            for i, manager in enumerate(node.managers):
+                if manager is not None:
+                    try:
+                        manager.close()
+                        print(f"Manager {i} cerrado correctamente")
+                    except Exception as e:
+                        print(f"Error al cerrar el manager {i}: {str(e)}")
+        # Mantener compatibilidad
+        elif hasattr(node, 'manager') and node.manager is not None:
             try:
                 node.manager.close()
             except Exception as e:
