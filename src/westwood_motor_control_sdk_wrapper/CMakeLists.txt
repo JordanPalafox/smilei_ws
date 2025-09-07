@@ -63,15 +63,6 @@ install(
   USE_SOURCE_PERMISSIONS
 )
 
-# Install launch files only if the directory is not empty
-file(GLOB LAUNCH_FILES "${CMAKE_CURRENT_SOURCE_DIR}/launch/*")
-list(LENGTH LAUNCH_FILES LAUNCH_FILES_COUNT)
-if(LAUNCH_FILES_COUNT GREATER 0)
-  install(
-    DIRECTORY launch/
-    DESTINATION share/${PROJECT_NAME}/launch
-  )
-endif()
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
