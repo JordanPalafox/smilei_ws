@@ -158,7 +158,7 @@ def main():
     )
 
     # Define the motor IDs to control
-    motor_ids = [6, 1]
+    motor_ids = [1, 2]
 
     # Añadir estado idle para evitar advertencias
     node.get_logger().info(f"Iniciando la máquina de estados con motores: {motor_ids}")
@@ -201,7 +201,7 @@ def main():
     home = HomePosition(name="GoHome", motor_ids=motor_ids, node=node)
     zero = ZeroPosition(name="GoZero", motor_ids=motor_ids, node=node)
     say_hello = SayHello(name="SayHello", motor_ids=motor_ids, node=node)
-    teleoperation = LocalTeleoperation(name="LocalTeleoperation", node=node)
+    teleoperation = LocalTeleoperation(name="LocalTeleoperation", motor_ids=motor_ids, node=node)
     disable = DisableRobot(name="DisableRobot", motor_ids=motor_ids, node=node)
 
     # Crear comportamiento raíz personalizado
