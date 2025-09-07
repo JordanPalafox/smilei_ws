@@ -2,10 +2,15 @@
 
 import rclpy
 from rclpy.node import Node
+from rclpy.executors import SingleThreadedExecutor
+from rclpy.callback_groups import ReentrantCallbackGroup
 from westwood_motor_interfaces.srv import SetMotorIdAndTarget, GetMotorPositions, GetAvailableMotors
 from westwood_motor_interfaces.srv import SetGains, SetMode, SetTorqueEnable, SetGoalIq
 import sys
 import os
+import sched
+import threading
+import time
 
 # Verificar si el módulo está disponible en el sistema
 try:
@@ -31,7 +36,10 @@ else:
 class WestwoodMotorServer(Node):
     def __init__(self):
         super().__init__('westwood_motor_server')
-        self.get_logger().info('Westwood Motor Server started')
+        self.get_logger().info('Westwood Motor Server started - REALTIME MODE')
+        
+        # Configure realtime scheduling
+        self.setup_realtime_scheduling()
         
         # Initialize empty motor mapping for early service setup
         self.motor_to_usb_map = {}
@@ -152,6 +160,36 @@ class WestwoodMotorServer(Node):
             self.get_logger().error(f'❌ Error al configurar servicios: {str(e)}')
             import traceback
             self.get_logger().error(traceback.format_exc())
+    
+    def setup_realtime_scheduling(self):
+        """Configure realtime scheduling for the server process"""
+        try:
+            import os
+            # Set high priority to the current process
+            # SCHED_FIFO with priority 50 (range is 1-99, where 99 is highest)
+            pid = os.getpid()
+            # Try to set realtime scheduling - requires sudo privileges
+            try:
+                os.system(f'chrt -f -p 50 {pid}')
+                self.get_logger().info(f'🚀 Realtime scheduling configured for PID {pid} with FIFO priority 50')
+            except Exception as e:
+                self.get_logger().warning(f'⚠️ Could not set realtime scheduling (requires sudo): {str(e)}')
+                self.get_logger().info('💡 Running with normal priority - consider running with sudo for realtime performance')
+                
+            # Set process nice value for higher priority (lower nice = higher priority)
+            try:
+                os.nice(-10)  # Increase priority (requires privileges)
+                self.get_logger().info('✅ Process priority increased with nice -10')
+            except Exception:
+                try:
+                    os.nice(-5)  # Try with less aggressive setting
+                    self.get_logger().info('✅ Process priority increased with nice -5')
+                except Exception:
+                    self.get_logger().warning('⚠️ Could not increase process priority')
+                    
+        except Exception as e:
+            self.get_logger().warning(f'⚠️ Realtime setup failed: {str(e)}')
+            self.get_logger().info('📝 Continuing with normal scheduling')
     
     def detect_and_map_motors(self):
         """Detectar automáticamente motores conectados y crear mapeo inteligente"""
@@ -983,7 +1021,10 @@ def main():
     rclpy.init()
     node = WestwoodMotorServer()
     try:
-        rclpy.spin(node)
+        # Use SingleThreadedExecutor for better realtime performance
+        executor = SingleThreadedExecutor()
+        executor.add_node(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     except Exception as e:
