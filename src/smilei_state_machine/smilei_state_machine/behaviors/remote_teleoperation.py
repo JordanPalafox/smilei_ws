@@ -156,18 +156,17 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
     def setup_udp_communication(self):
         """Configurar sockets UDP para comunicación remota"""
         try:
-            # Socket para enviar datos (servidor)
+            # Socket para enviar datos (no necesita bind específico)
             self.send_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.send_socket.bind((self.remote_ip, self.send_port))
             self.send_socket.settimeout(0.001)
             
-            # Socket para recibir datos (cliente)
+            # Socket para recibir datos (bind en IP local en puerto de recepción)
             self.receive_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.receive_socket.bind((self.remote_ip, self.receive_port))
+            self.receive_socket.bind((self.local_ip, self.receive_port))
             self.receive_socket.settimeout(0.001)
             
-            self.node.get_logger().info(f"UDP configurado: Envío desde {self.remote_ip}:{self.send_port}, "
-                                      f"Recepción en {self.remote_ip}:{self.receive_port}")
+            self.node.get_logger().info(f"UDP configurado: Envío hacia {self.remote_ip}:{self.receive_port}, "
+                                      f"Recepción en {self.local_ip}:{self.receive_port}")
             return True
         except Exception as e:
             self.node.get_logger().error(f"Error configurando UDP: {str(e)}")
@@ -289,10 +288,19 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 pos_to_send.extend([0.0] * (8 - len(pos_to_send)))
             
             struct_data = struct.pack('8f', *pos_to_send[:8])
-            self.send_socket.sendto(struct_data, (self.local_ip, self.send_port))
+            # Enviar al puerto de recepción de la máquina remota
+            self.send_socket.sendto(struct_data, (self.remote_ip, self.receive_port))
+            
+            # Debug cada 100 envíos
+            if not hasattr(self, '_send_count'):
+                self._send_count = 0
+            self._send_count += 1
+            
+            if self._send_count % 100 == 0:
+                self.node.get_logger().info(f"📤 Enviando posición {pos_to_send[0]:.3f} a {self.remote_ip}:{self.receive_port}")
             
         except Exception as e:
-            self.node.get_logger().debug(f"Error enviando posiciones: {str(e)}")
+            self.node.get_logger().warning(f"Error enviando posiciones: {str(e)}")
 
     def receive_positions(self):
         """Recibe posiciones remotas vía UDP"""
@@ -305,11 +313,19 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             
             with self.data_lock:
                 self.received_data.append(struct_data)
+            
+            # Debug cada 100 recepciones
+            if not hasattr(self, '_receive_count'):
+                self._receive_count = 0
+            self._receive_count += 1
+            
+            if self._receive_count % 100 == 0:
+                self.node.get_logger().info(f"📥 Recibido posición {struct_data[0]:.3f} de {addr}")
                 
         except socket.timeout:
             pass  # Timeout normal
         except Exception as e:
-            self.node.get_logger().debug(f"Error recibiendo posiciones: {str(e)}")
+            self.node.get_logger().warning(f"Error recibiendo posiciones: {str(e)}")
 
     def update_target_positions(self):
         """Actualiza posiciones objetivo desde datos recibidos con límites de seguridad"""
@@ -371,11 +387,22 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             req.motor_ids = self.motor_ids
             req.goal_iq = currents
             
+            # Debug de corrientes cada 100 comandos
+            if not hasattr(self, '_current_send_count'):
+                self._current_send_count = 0
+            self._current_send_count += 1
+            
+            if self._current_send_count % 100 == 0:
+                curr_str = ", ".join([f"I{i}={c:.3f}" for i, c in enumerate(currents)])
+                self.node.get_logger().info(f"⚡ Enviando corrientes: [{curr_str}]")
+            
             future = self.set_iq_client.call_async(req)
             rclpy.spin_until_future_complete(self.node, future, timeout_sec=0.05)
             
             if future.done():
                 result = future.result()
+                if not result.success and self._current_send_count % 50 == 0:
+                    self.node.get_logger().warning(f"Error en set_goal_iq: {result.message}")
                 return result.success
             
             return False
@@ -460,10 +487,11 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             
             if self._debug_counter % 50 == 0:
                 pos_str = ", ".join([f"M{mid}={pos:.3f}" for mid, pos in 
-                                   zip(self.motor_ids[:4], self.current_positions[:4])])
+                                   zip(self.motor_ids, self.current_positions)])
                 target_str = ", ".join([f"T{i}={t:.3f}" for i, t in 
-                                      enumerate(self.target_positions[:4])])
-                self.node.get_logger().info(f"Pos: [{pos_str}] Target: [{target_str}]")
+                                      enumerate(self.target_positions)])
+                error = self.current_positions[0] - self.target_positions[0] if len(self.current_positions) > 0 and len(self.target_positions) > 0 else 0.0
+                self.node.get_logger().info(f"Pos: [{pos_str}] Target: [{target_str}] Error: {error:.3f}")
             
         except Exception as e:
             self.node.get_logger().error(f"Error en teleoperación remota: {str(e)}")
