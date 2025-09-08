@@ -17,31 +17,18 @@ import threading
 import sys
 from pathlib import Path
 
-# Agregar path para importar configuración
-sys.path.append(str(Path(__file__).parent.parent / "config"))
-
-try:
-    from remote_teleop_config import get_network_config, get_motor_config, print_config_summary
-    CONFIG_AVAILABLE = True
-except ImportError:
-    CONFIG_AVAILABLE = False
-    print("⚠️ Configuración no encontrada, usando valores por defecto")
+# Usar valores por defecto sin archivo de configuración
+CONFIG_AVAILABLE = False
 
 class UDPTester:
     """Clase para probar comunicación UDP"""
     
     def __init__(self):
-        if CONFIG_AVAILABLE:
-            config = get_network_config()
-            self.local_ip = config['local_ip']
-            self.remote_ip = config['remote_ip']
-            self.send_port = config['send_port']
-            self.receive_port = config['receive_port']
-        else:
-            self.local_ip = '192.168.4.241'
-            self.remote_ip = '192.168.4.238'
-            self.send_port = 5005
-            self.receive_port = 4000
+        # Usar valores por defecto para máquina A
+        self.local_ip = '192.168.4.241'
+        self.remote_ip = '192.168.4.238'
+        self.send_port = 4000
+        self.receive_port = 5001
         
         self.running = False
         
@@ -133,12 +120,7 @@ class UDPTester:
 
 def test_network_connectivity():
     """Prueba conectividad de red básica"""
-    if not CONFIG_AVAILABLE:
-        print("❌ Configuración no disponible para test de red")
-        return False
-        
-    config = get_network_config()
-    remote_ip = config['remote_ip']
+    remote_ip = '192.168.4.238'  # IP por defecto de máquina B
     
     print(f"🌐 Probando conectividad hacia {remote_ip}...")
     
@@ -166,11 +148,12 @@ def main():
     
     if args.mode == 'config':
         print("📋 CONFIGURACIÓN ACTUAL")
-        if CONFIG_AVAILABLE:
-            print_config_summary()
-        else:
-            print("❌ Archivo de configuración no encontrado")
-            print("   Asegúrese de que config/remote_teleop_config.py existe")
+        print("   Configuración por defecto para máquina A:")
+        print(f"   - IP Local: 192.168.4.241")
+        print(f"   - IP Remota: 192.168.4.238")
+        print(f"   - Puerto Envío: 4000")
+        print(f"   - Puerto Recepción: 5001")
+        print("   ⚠️ Para máquina B, intercambie las IPs y puertos")
             
     elif args.mode == 'ping':
         test_network_connectivity()

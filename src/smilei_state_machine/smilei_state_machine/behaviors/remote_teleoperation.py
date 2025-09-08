@@ -7,46 +7,11 @@ import socket
 import struct
 import threading
 import numpy as np
-from pathlib import Path
 from westwood_motor_interfaces.srv import (
     SetMotorIdAndTarget, GetMotorPositions, GetMotorVelocities,
     SetGains, SetMode, SetTorqueEnable, SetGoalIq
 )
 
-# Importar configuración
-try:
-    import sys
-    sys.path.append(str(Path(__file__).parent.parent.parent / "config"))
-    from remote_teleop_config import get_network_config, get_motor_config, get_communication_config
-    CONFIG_AVAILABLE = True
-except ImportError:
-    CONFIG_AVAILABLE = False
-
-class RemoteTeleoperationGains:
-    """
-    Ganancias para teleoperación remota (control por corriente)
-    Basado en el código original de Python
-    """
-    # Ganancias PID para iq/id (control de corriente)
-    p_gain_iq = 0.277
-    i_gain_iq = 0.061
-    d_gain_iq = 0.0
-    p_gain_id = 0.277
-    i_gain_id = 0.061
-    d_gain_id = 0.0
-    
-    # Ganancias de posición (puestas a cero para control de corriente)
-    p_gain_position = 0.0
-    i_gain_position = 0.0
-    d_gain_position = 0.0
-    
-    # Ganancias de control remoto
-    kp = [1.75, 1.75, 1.75, 1.75, 1.75, 1.75, 1.75, 1.75]
-    kd = [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
-    
-    # Constantes físicas
-    iq_max = 3.0
-    kt = 0.35  # N.m/A
 
 class RemoteTeleoperation(py_trees.behaviour.Behaviour):
     """
@@ -55,71 +20,26 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
     
     Basado en el código original de teleoperación remota de main.py
     """
-    def __init__(self, name: str, motor_ids=None, node=None, 
-                 remote_ip=None, local_ip=None, send_port=None, receive_port=None):
+    def __init__(self, name: str, motor_ids=None, node=None):
         super().__init__(name)
         self.node = node
         self.running = False
         self.own_node = False
         
-        # Cargar configuración desde archivo o usar valores por defecto
-        config_loaded = False
-        if CONFIG_AVAILABLE:
-            try:
-                # Importar la configuración
-                import importlib
-                import sys
-                config_path = str(Path(__file__).parent.parent.parent / "config")
-                if config_path not in sys.path:
-                    sys.path.insert(0, config_path)
-                
-                # Recargar el módulo para obtener cambios frescos
-                import remote_teleop_config
-                importlib.reload(remote_teleop_config)
-                
-                net_config = remote_teleop_config.get_network_config()
-                motor_config = remote_teleop_config.get_motor_config()
-                comm_config = remote_teleop_config.get_communication_config()
-                
-                # Usar configuración del archivo (ignore parámetros del constructor)
-                self.motor_ids = motor_config['motor_ids']
-                self.remote_ip = net_config['remote_ip']
-                self.local_ip = net_config['local_ip']
-                self.send_port = net_config['send_port']
-                self.receive_port = net_config['receive_port']
-                self.max_communication_errors = comm_config['max_errors']
-                
-                # Debug detallado de configuración
-                machine_type = "A" if remote_teleop_config.IS_MACHINE_A else "B"
-                print(f"✅ CONFIG: Máquina {machine_type} cargada desde archivo")
-                print(f"   Local: {self.local_ip}:{self.receive_port} (recibe)")
-                print(f"   Remote: {self.remote_ip}:{self.send_port} (envía)")
-                print(f"   Motores: {self.motor_ids}")
-                
-                # Ganancias desde configuración
-                RemoteTeleoperationGains.kp = motor_config['control_gains']['kp'][:len(self.motor_ids)]
-                RemoteTeleoperationGains.kd = motor_config['control_gains']['kd'][:len(self.motor_ids)]
-                config_loaded = True
-                
-            except Exception as e:
-                print(f"❌ CONFIG: Error cargando configuración: {e}")
-                print(f"   Usando valores por defecto")
-                import traceback
-                traceback.print_exc()
-                config_loaded = False
+        # Configuración desde parámetros ROS2 (se carga en setup)
+        self.motor_ids = None
+        self.local_ip = None
+        self.remote_ip = None  
+        self.send_port = None
+        self.receive_port = None
+        self.control_gains = None
+        self.socket_timeout = 0.001
+        self.max_communication_errors = 10
+        self.control_frequency = 1000
         
-        if not config_loaded:
-            # Valores por defecto si no hay configuración - Máquina A
-            self.motor_ids = motor_ids if motor_ids is not None else [1]
-            self.remote_ip = remote_ip or '192.168.4.238'
-            self.local_ip = local_ip or '192.168.4.241'
-            self.send_port = send_port or 4000
-            self.receive_port = receive_port or 5001
-            self.max_communication_errors = 10
-            print(f"⚠️ CONFIG: Usando valores por defecto (Máquina A)")
-            print(f"   Local: {self.local_ip}:{self.receive_port} (recibe)")
-            print(f"   Remote: {self.remote_ip}:{self.send_port} (envía)")
-            print(f"   Motores: {self.motor_ids}")
+        # Ganancias de motor (se cargan desde parámetros)
+        self.current_control_gains = None
+        self.position_control_gains = None
         
         # Sockets UDP
         self.send_socket = None
@@ -138,10 +58,10 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         self.set_torque_client = None
         self.set_iq_client = None
         
-        # Variables para control
-        self.current_positions = [0.0] * len(self.motor_ids)
-        self.current_velocities = [0.0] * len(self.motor_ids)
-        self.target_positions = [0.0] * len(self.motor_ids)
+        # Variables para control (se inicializan después de cargar parámetros)
+        self.current_positions = []
+        self.current_velocities = []
+        self.target_positions = []
         
         # Variables para manejo de errores
         self.communication_error_count = 0
@@ -153,6 +73,107 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.own_node = True
         else:
             self.own_node = False
+        
+        # Declarar y cargar parámetros desde ROS2
+        try:
+            # Declarar parámetros de teleoperación remota
+            self.node.declare_parameter('remote_teleoperation.motor_ids', [1])
+            self.node.declare_parameter('remote_teleoperation.is_machine_a', True)
+            self.node.declare_parameter('remote_teleoperation.machine_a_ip', '192.168.4.241')
+            self.node.declare_parameter('remote_teleoperation.machine_b_ip', '192.168.4.238')
+            self.node.declare_parameter('remote_teleoperation.socket_timeout', 0.001)
+            self.node.declare_parameter('remote_teleoperation.max_communication_errors', 10)
+            self.node.declare_parameter('remote_teleoperation.control_frequency', 1000)
+            self.node.declare_parameter('remote_teleoperation.control_gains.kp', [1.75] * 8)
+            self.node.declare_parameter('remote_teleoperation.control_gains.kd', [0.1] * 8)
+            
+            # Declarar parámetros de ganancias de control de corriente (no están declarados)
+            self.node.declare_parameter('current_control_gains.p_gain_position', 0.0)
+            self.node.declare_parameter('current_control_gains.d_gain_position', 0.0)
+            self.node.declare_parameter('current_control_gains.i_gain_position', 0.0)
+            self.node.declare_parameter('current_control_gains.p_gain_force', 0.0)
+            self.node.declare_parameter('current_control_gains.d_gain_force', 0.0)
+            self.node.declare_parameter('current_control_gains.i_gain_force', 0.0)
+            self.node.declare_parameter('current_control_gains.iq_max', 3.0)
+            self.node.declare_parameter('current_control_gains.p_gain_iq', 0.277)
+            self.node.declare_parameter('current_control_gains.i_gain_iq', 0.061)
+            self.node.declare_parameter('current_control_gains.d_gain_iq', 0.0)
+            self.node.declare_parameter('current_control_gains.p_gain_id', 0.277)
+            self.node.declare_parameter('current_control_gains.i_gain_id', 0.061)
+            self.node.declare_parameter('current_control_gains.d_gain_id', 0.0)
+            self.node.declare_parameter('current_control_gains.kt', 0.35)
+            
+            # Cargar valores de parámetros
+            self.motor_ids = self.node.get_parameter('remote_teleoperation.motor_ids').value
+            is_machine_a = self.node.get_parameter('remote_teleoperation.is_machine_a').value
+            machine_a_ip = self.node.get_parameter('remote_teleoperation.machine_a_ip').value
+            machine_b_ip = self.node.get_parameter('remote_teleoperation.machine_b_ip').value
+            self.socket_timeout = self.node.get_parameter('remote_teleoperation.socket_timeout').value
+            self.max_communication_errors = self.node.get_parameter('remote_teleoperation.max_communication_errors').value
+            self.control_frequency = self.node.get_parameter('remote_teleoperation.control_frequency').value
+            
+            # Configurar ganancias de control
+            kp_list = self.node.get_parameter('remote_teleoperation.control_gains.kp').value
+            kd_list = self.node.get_parameter('remote_teleoperation.control_gains.kd').value
+            self.control_gains = {
+                'kp': kp_list,
+                'kd': kd_list
+            }
+            
+            # Cargar ganancias de motor (current_control_gains recién declarados, position_control_gains ya existe)
+            self.current_control_gains = {
+                'p_gain_position': self.node.get_parameter('current_control_gains.p_gain_position').value,
+                'd_gain_position': self.node.get_parameter('current_control_gains.d_gain_position').value,
+                'i_gain_position': self.node.get_parameter('current_control_gains.i_gain_position').value,
+                'p_gain_force': self.node.get_parameter('current_control_gains.p_gain_force').value,
+                'd_gain_force': self.node.get_parameter('current_control_gains.d_gain_force').value,
+                'i_gain_force': self.node.get_parameter('current_control_gains.i_gain_force').value,
+                'iq_max': self.node.get_parameter('current_control_gains.iq_max').value,
+                'p_gain_iq': self.node.get_parameter('current_control_gains.p_gain_iq').value,
+                'i_gain_iq': self.node.get_parameter('current_control_gains.i_gain_iq').value,
+                'd_gain_iq': self.node.get_parameter('current_control_gains.d_gain_iq').value,
+                'p_gain_id': self.node.get_parameter('current_control_gains.p_gain_id').value,
+                'i_gain_id': self.node.get_parameter('current_control_gains.i_gain_id').value,
+                'd_gain_id': self.node.get_parameter('current_control_gains.d_gain_id').value,
+                'kt': self.node.get_parameter('current_control_gains.kt').value
+            }
+            
+            self.position_control_gains = {
+                'p_gain_position': self.node.get_parameter('position_control_gains.p_gain_position').value,
+                'd_gain_position': self.node.get_parameter('position_control_gains.d_gain_position').value,
+                'i_gain_position': self.node.get_parameter('position_control_gains.i_gain_position').value,
+                'iq_max': self.node.get_parameter('position_control_gains.iq_max').value,
+                'p_gain_iq': self.node.get_parameter('position_control_gains.p_gain_iq').value,
+                'i_gain_iq': self.node.get_parameter('position_control_gains.i_gain_iq').value,
+                'd_gain_iq': self.node.get_parameter('position_control_gains.d_gain_iq').value,
+                'p_gain_id': self.node.get_parameter('position_control_gains.p_gain_id').value,
+                'i_gain_id': self.node.get_parameter('position_control_gains.i_gain_id').value,
+                'd_gain_id': self.node.get_parameter('position_control_gains.d_gain_id').value,
+                'kt': self.node.get_parameter('position_control_gains.kt').value
+            }
+            
+            # Configurar IPs y puertos basado en qué máquina somos
+            if is_machine_a:
+                self.local_ip = machine_a_ip
+                self.remote_ip = machine_b_ip
+                self.send_port = 4000      # Máquina A envía al puerto 4000
+                self.receive_port = 5001   # Máquina A recibe en puerto 5001
+            else:
+                self.local_ip = machine_b_ip
+                self.remote_ip = machine_a_ip
+                self.send_port = 5001      # Máquina B envía al puerto 5001
+                self.receive_port = 4000   # Máquina B recibe en puerto 4000
+            
+            # Inicializar variables de control
+            self.current_positions = [0.0] * len(self.motor_ids)
+            self.current_velocities = [0.0] * len(self.motor_ids)
+            self.target_positions = [0.0] * len(self.motor_ids)
+            
+            self.node.get_logger().info(f"Configuración cargada: Motors={self.motor_ids}, IP={self.local_ip}→{self.remote_ip}")
+            
+        except Exception as e:
+            self.node.get_logger().error(f"Error cargando parámetros: {str(e)}")
+            return False
         
         # Crear clientes para servicios
         self.set_position_client = self.node.create_client(
@@ -192,12 +213,12 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         try:
             # Socket para enviar datos (no necesita bind específico)
             self.send_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.send_socket.settimeout(0.001)
+            self.send_socket.settimeout(self.socket_timeout)
             
             # Socket para recibir datos (bind en IP local en puerto de recepción)
             self.receive_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.receive_socket.bind((self.local_ip, self.receive_port))
-            self.receive_socket.settimeout(0.001)
+            self.receive_socket.settimeout(self.socket_timeout)
             
             self.node.get_logger().info(f"UDP configurado: Envío hacia {self.remote_ip}:{self.send_port}, "
                                       f"Recepción en {self.local_ip}:{self.receive_port}")
@@ -238,17 +259,17 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             # Configurar ganancias para control de corriente
             req_gains = SetGains.Request()
             req_gains.motor_ids = self.motor_ids
-            req_gains.p_gain_iq = float(RemoteTeleoperationGains.p_gain_iq)
-            req_gains.i_gain_iq = float(RemoteTeleoperationGains.i_gain_iq)
-            req_gains.d_gain_iq = float(RemoteTeleoperationGains.d_gain_iq)
-            req_gains.p_gain_id = float(RemoteTeleoperationGains.p_gain_id)
-            req_gains.i_gain_id = float(RemoteTeleoperationGains.i_gain_id)
-            req_gains.d_gain_id = float(RemoteTeleoperationGains.d_gain_id)
-            req_gains.p_gain_position = float(RemoteTeleoperationGains.p_gain_position)
-            req_gains.i_gain_position = float(RemoteTeleoperationGains.i_gain_position)
-            req_gains.d_gain_position = float(RemoteTeleoperationGains.d_gain_position)
-            req_gains.iq_max = float(RemoteTeleoperationGains.iq_max)
-            req_gains.kt = float(RemoteTeleoperationGains.kt)
+            req_gains.p_gain_iq = float(self.current_control_gains['p_gain_iq'])
+            req_gains.i_gain_iq = float(self.current_control_gains['i_gain_iq'])
+            req_gains.d_gain_iq = float(self.current_control_gains['d_gain_iq'])
+            req_gains.p_gain_id = float(self.current_control_gains['p_gain_id'])
+            req_gains.i_gain_id = float(self.current_control_gains['i_gain_id'])
+            req_gains.d_gain_id = float(self.current_control_gains['d_gain_id'])
+            req_gains.p_gain_position = float(self.current_control_gains['p_gain_position'])
+            req_gains.i_gain_position = float(self.current_control_gains['i_gain_position'])
+            req_gains.d_gain_position = float(self.current_control_gains['d_gain_position'])
+            req_gains.iq_max = float(self.current_control_gains['iq_max'])
+            req_gains.kt = float(self.current_control_gains['kt'])
             
             future = self.set_gains_client.call_async(req_gains)
             rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
@@ -409,10 +430,10 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                     vel_error = self.current_velocities[i]
                 
                 # Calcular corriente objetivo usando ganancias
-                kp = RemoteTeleoperationGains.kp[i] if i < len(RemoteTeleoperationGains.kp) else 1.75
-                kd = RemoteTeleoperationGains.kd[i] if i < len(RemoteTeleoperationGains.kd) else 0.1
+                kp = self.control_gains['kp'][i] if i < len(self.control_gains['kp']) else 1.75
+                kd = self.control_gains['kd'][i] if i < len(self.control_gains['kd']) else 0.1
                 
-                iq = (-kp * pos_error - kd * vel_error) / RemoteTeleoperationGains.kt
+                iq = (-kp * pos_error - kd * vel_error) / self.current_control_gains['kt']
                 currents.append(iq)
             else:
                 currents.append(0.0)
@@ -555,7 +576,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.node.get_logger().error(f"Error en teleoperación remota: {str(e)}")
             self.communication_error_count += 1
         
-        time.sleep(0.001)  # Control de alta frecuencia como en el original
+        time.sleep(1.0 / self.control_frequency)  # Control de alta frecuencia configurable
         return py_trees.common.Status.RUNNING
 
     def restore_position_control(self):
@@ -566,17 +587,17 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             # Restaurar ganancias de posición
             req_gains = SetGains.Request()
             req_gains.motor_ids = self.motor_ids
-            req_gains.p_gain_position = 5.0   # Del código original
-            req_gains.i_gain_position = 0.0
-            req_gains.d_gain_position = 0.2
-            req_gains.p_gain_iq = 0.02
-            req_gains.i_gain_iq = 0.02
-            req_gains.d_gain_iq = 0.0
-            req_gains.p_gain_id = 0.02
-            req_gains.i_gain_id = 0.02
-            req_gains.d_gain_id = 0.0
-            req_gains.iq_max = 3.0
-            req_gains.kt = 0.35
+            req_gains.p_gain_position = float(self.position_control_gains['p_gain_position'])
+            req_gains.i_gain_position = float(self.position_control_gains['i_gain_position'])
+            req_gains.d_gain_position = float(self.position_control_gains['d_gain_position'])
+            req_gains.p_gain_iq = float(self.position_control_gains['p_gain_iq'])
+            req_gains.i_gain_iq = float(self.position_control_gains['i_gain_iq'])
+            req_gains.d_gain_iq = float(self.position_control_gains['d_gain_iq'])
+            req_gains.p_gain_id = float(self.position_control_gains['p_gain_id'])
+            req_gains.i_gain_id = float(self.position_control_gains['i_gain_id'])
+            req_gains.d_gain_id = float(self.position_control_gains['d_gain_id'])
+            req_gains.iq_max = float(self.position_control_gains['iq_max'])
+            req_gains.kt = float(self.position_control_gains['kt'])
             
             future = self.set_gains_client.call_async(req_gains)
             rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)

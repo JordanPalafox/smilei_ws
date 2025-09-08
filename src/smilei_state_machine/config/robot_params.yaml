@@ -95,4 +95,24 @@ smilei_state_machine:
       rcz4: -0.0279
       
       # Gravedad
-      g: 9.81 
+      g: 9.81
+
+    # Configuración para teleoperación remota
+    remote_teleoperation:
+      # Configuración de red
+      is_machine_a: true              # true para máquina A, false para máquina B
+      machine_a_ip: '192.168.4.241'   # IP de la máquina A
+      machine_b_ip: '192.168.4.238'   # IP de la máquina B
+      
+      # Configuración de motores
+      motor_ids: [1]                  # Lista de IDs de motores a controlar
+      
+      # Ganancias de control PD para teleoperación
+      control_gains:
+        kp: [1.75, 1.75, 1.75, 1.75, 1.75, 1.75, 1.75, 1.75]  # Ganancia proporcional
+        kd: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]          # Ganancia derivativa
+      
+      # Configuración de comunicación
+      socket_timeout: 0.001
+      max_communication_errors: 10
+      control_frequency: 1000 

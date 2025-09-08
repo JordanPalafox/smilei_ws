@@ -34,6 +34,7 @@ class EnableRobot(py_trees.behaviour.Behaviour):
         self.node.declare_parameter('position_control_gains.p_gain_id', 0.02)
         self.node.declare_parameter('position_control_gains.i_gain_id', 0.02)
         self.node.declare_parameter('position_control_gains.d_gain_id', 0.0)
+        self.node.declare_parameter('position_control_gains.kt', 0.35)
         
         # Obtener parámetros
         self.p_gain_position = self.node.get_parameter('position_control_gains.p_gain_position').value
@@ -46,6 +47,7 @@ class EnableRobot(py_trees.behaviour.Behaviour):
         self.p_gain_id = self.node.get_parameter('position_control_gains.p_gain_id').value
         self.i_gain_id = self.node.get_parameter('position_control_gains.i_gain_id').value
         self.d_gain_id = self.node.get_parameter('position_control_gains.d_gain_id').value
+        self.kt = self.node.get_parameter('position_control_gains.kt').value
         
         # Crear clientes para los servicios
         self.get_available_motors_client = self.node.create_client(
@@ -138,7 +140,7 @@ class EnableRobot(py_trees.behaviour.Behaviour):
         request.i_gain_id = self.i_gain_id
         request.d_gain_id = self.d_gain_id
         request.iq_max = self.iq_max
-        request.kt = 0.35  # Valor predeterminado del kt
+        request.kt = self.kt
         
         future = self.set_position_gains_client.call_async(request)
         rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
