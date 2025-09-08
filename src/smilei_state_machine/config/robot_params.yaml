@@ -97,10 +97,13 @@ smilei_state_machine:
       # Gravedad
       g: 9.81
 
+# Configuración específica para el nodo state_machine_node
+state_machine_node:
+  ros__parameters:
     # Configuración para teleoperación remota
     remote_teleoperation:
       # Configuración de red
-      is_machine_a: true              # true para máquina A, false para máquina B
+      is_machine_a: false              # true para máquina A, false para máquina B
       machine_a_ip: '192.168.4.241'   # IP de la máquina A
       machine_b_ip: '192.168.4.238'   # IP de la máquina B
       
@@ -115,4 +118,35 @@ smilei_state_machine:
       # Configuración de comunicación
       socket_timeout: 0.001
       max_communication_errors: 10
-      control_frequency: 1000 
+      control_frequency: 1000
+    
+    # Ganancias para el modo de control de posición
+    position_control_gains:
+      p_gain_position: 5.0
+      d_gain_position: 0.2
+      i_gain_position: 0.0
+      iq_max: 1.5
+      p_gain_iq: 0.02
+      i_gain_iq: 0.02
+      d_gain_iq: 0.0
+      p_gain_id: 0.02
+      i_gain_id: 0.02
+      d_gain_id: 0.0
+      kt: 0.35
+
+    # Ganancias para el modo de control de corriente
+    current_control_gains:
+      p_gain_position: 0.0
+      d_gain_position: 0.0
+      i_gain_position: 0.0
+      p_gain_force: 0.0
+      d_gain_force: 0.0
+      i_gain_force: 0.0
+      iq_max: 3.0
+      p_gain_iq: 0.277
+      i_gain_iq: 0.061
+      d_gain_iq: 0.0
+      p_gain_id: 0.277
+      i_gain_id: 0.061
+      d_gain_id: 0.0
+      kt: 0.35 
