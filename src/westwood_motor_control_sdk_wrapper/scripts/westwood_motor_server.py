@@ -4,7 +4,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
-from westwood_motor_interfaces.srv import SetMotorIdAndTarget, GetMotorPositions, GetAvailableMotors
+from westwood_motor_interfaces.srv import SetMotorIdAndTarget, SetMotorIdAndTargetVelocity, GetMotorPositions, GetMotorVelocities, GetAvailableMotors
 from westwood_motor_interfaces.srv import SetGains, SetMode, SetTorqueEnable, SetGoalIq
 import sys
 import os
@@ -340,12 +340,29 @@ class WestwoodMotorServer(Node):
             )
         except Exception as e:
             self.get_logger().error(f'Error al registrar servicio multi-motor con arrays: {str(e)}')
+
+        #Añadir servicio para manejar múltiples motores con velocidades
+        try:
+            self.set_motor_id_and_target_velocity_service = self.create_service(
+                SetMotorIdAndTargetVelocity,
+                'westwood_motor/set_motor_id_and_target_velocity',
+                self.handle_motor_ids_and_target_velocity
+            )
+        except Exception as e:
+            self.get_logger().error(f'Error al registrar servicio multi-motor con arrays de velocidad: {str(e)}')
         
         # Añadir servicio para obtener posiciones actuales de motores
         self.get_motor_positions_service = self.create_service(
             GetMotorPositions,
             'westwood_motor/get_motor_positions',
             self.handle_get_motor_positions
+        )
+
+        # Añadir servicio para obtener velocidades actuales de motores
+        self.get_motor_velocities_service = self.create_service(
+            GetMotorVelocities,
+            'westwood_motor/get_motor_velocities',
+            self.handle_get_motor_velocities
         )
         
         # Añadir servicio para obtener IDs de motores disponibles
@@ -536,6 +553,154 @@ class WestwoodMotorServer(Node):
             response.message = f"Error: {str(e)}"
             response.previous_positions = []
             return response
+        
+    # Función principal para manejar IDs de motores y sus velocidades objetivo 
+    def handle_motor_ids_and_target_velocity(self, request, response):
+        """Callback para controlar múltiples motores con velocidades objetivo individuales"""
+        try:
+            # Si no hay motores especificados, no hay nada que hacer
+            if not request.motor_ids or len(request.motor_ids) == 0:
+                response.success = False
+                response.message = "No se especificaron IDs de motores"
+                return response
+            
+            # Si la cantidad de motores no coincide con la cantidad de velocidades
+            if len(request.motor_ids) != len(request.target_velocities):
+                response.success = False
+                response.message = "La cantidad de IDs de motores no coincide con la cantidad de velocidades objetivo"
+                return response
+            
+            successful_motors = []
+            failed_motor_ids = []
+            previous_velocities = []
+            
+            self.get_logger().info(f'🎯 Iniciando control de motores: {request.motor_ids} hacia velocidades: {request.target_velocities}')
+            
+            # Verificar conexión de cada motor usando el cache
+            for motor_id in request.motor_ids:
+                try:
+                    # Usar el método ping_motor que ahora usa cache
+                    if self.ping_motor(motor_id):
+                        self.get_logger().info(f'✅ Motor {motor_id} verificado y listo')
+                    else:
+                        failed_motor_ids.append(motor_id)
+                        self.get_logger().warning(f'❌ Motor {motor_id} no está disponible')
+                except Exception as e:
+                    self.get_logger().error(f'❌ Error al verificar motor {motor_id}: {str(e)}')
+                    failed_motor_ids.append(motor_id)
+            
+            # Obtener motores disponibles (excluyendo los que ya fallaron)
+            available_motors = [m for m in request.motor_ids if m not in failed_motor_ids]
+            
+            if available_motors:
+                self.get_logger().info(f'🚀 Motores disponibles para control: {available_motors}')
+            else:
+                self.get_logger().warning(f'⚠️  Ningún motor respondió. Fallidos: {failed_motor_ids}')
+                
+            # Para cada motor disponible, configurar y mover
+            for motor_id in available_motors:
+                # Obtener el índice del motor en la lista original
+                idx = request.motor_ids.index(motor_id)
+                
+                # Obtener el manager correcto para este motor
+                manager, local_id = self.get_manager_for_motor(motor_id)
+                
+                if manager is None:
+                    self.get_logger().error(f'No se encontró para motor {motor_id}')
+                    failed_motor_ids.append(motor_id)
+                    previous_velocities.append(0.0)
+                    continue
+
+                try:
+                    # Leer velocidad actual y guardarla
+                    current_velocity_result = manager.get_present_velocity(local_id)
+                    if current_velocity_result and len(current_velocity_result) > 0:
+                        current_velocity = float(current_velocity_result[0][0][0])
+                        target_velocity = request.target_velocities[idx]
+                        
+                        # Mientras idx < len(previous_velocities), significa que ya hay velocidades guardadas
+                        while len(previous_velocities) <= idx:
+                            previous_velocities.append(0.0)
+                        previous_velocities[idx] = current_velocity
+                        
+                        self.get_logger().info(f'🔧 Motor {motor_id}: velocidad actual {current_velocity:.3f} → objetivo {target_velocity:.3f}')
+                        
+                        # Configurar PID para el control de velocidad (optimizado - menos comandos)
+                        manager.set_p_gain_iq((local_id, 0.02))
+                        manager.set_i_gain_iq((local_id, 0.02))
+                        manager.set_d_gain_iq((local_id, 0))
+                        manager.set_p_gain_id((local_id, 0.02))
+                        manager.set_i_gain_id((local_id, 0.02))
+                        manager.set_d_gain_id((local_id, 0))
+
+                        # PID velocity mode
+                        manager.set_p_gain_velocity((local_id, 0.05))
+                        manager.set_i_gain_velocity((local_id, 0.01))
+                        manager.set_d_gain_velocity((local_id, 0.0))
+                        
+                        # Configurar modo y límites
+                        manager.set_mode((local_id, 1))  # Modo velocidad
+                        manager.set_limit_iq_max((local_id, 1.5))  # Límite de corriente
+                        
+                        # Habilitar torque y mover
+                        manager.set_torque_enable((local_id, 1))
+                        manager.set_goal_velocity((local_id, target_velocity))
+                        
+                        successful_motors.append(motor_id)
+                        self.get_logger().info(f'✅ Motor {motor_id} configurado y moviendo')
+                    else:
+                        while len(previous_velocities) <= idx:
+                            previous_velocities.append(0.0)
+                        failed_motor_ids.append(motor_id)
+                        self.get_logger().warning(f'❌ No se pudo leer la velocidad actual del motor {motor_id}')
+                except Exception as e:
+                    self.get_logger().error(f'❌ Error al configurar/mover motor {motor_id}: {str(e)}')
+                    failed_motor_ids.append(motor_id)
+                    while len(previous_velocities) <= idx:
+                        previous_velocities.append(0.0)
+
+            # Asegurar que previous_velocities tiene la misma longitud que request.motor_ids
+            while len(previous_velocities) < len(request.motor_ids):
+                previous_velocities.append(0.0)
+
+            # Preparar respuesta detallada
+            total_requested = len(request.motor_ids)
+            total_successful = len(successful_motors)
+            total_failed = len(set(failed_motor_ids))
+            # Eliminar duplicados
+
+            self.get_logger().info(f"📊 Estadísticas finales: solicitados={total_requested}, exitosos={total_successful}, fallidos={total_failed}")
+            self.get_logger().info(f"📊 Motores exitosos: {successful_motors}")
+            self.get_logger().info(f"📊 Motores fallidos: {list(set(failed_motor_ids))}")
+
+            if total_successful > 0:
+                response.success = True
+                if total_failed == 0:
+                    response.message = f"✅ Control exitoso de {total_successful} motores: {successful_motors}"
+                    self.get_logger().info(f"🎉 Control completado exitosamente para todos los motores: {successful_motors}")
+                else:
+                    response.message = f"⚠️  Control parcial: {total_successful} motores exitosos {successful_motors}, {total_failed} fallaron {list(set(failed_motor_ids))}"
+                    self.get_logger().warning(f"⚠️  Control parcial: exitosos {successful_motors}, fallidos {list(set(failed_motor_ids))}")
+            else:
+                response.success = False
+                response.message = f"❌ No se pudieron controlar ningún motor. Fallidos: {list(set(failed_motor_ids))}"
+                self.get_logger().error(f"❌ Control fallido para todos los motores solicitados: {request.motor_ids}")
+            
+            response.previous_velocities = previous_velocities
+
+            # Debug final de la respuesta antes de enviarla
+            self.get_logger().info(f"🔍 RESPUESTA FINAL: success={response.success},message='{response.message}', previous_velocities={response.previous_velocities}")
+
+            return response
+
+        except Exception as e:
+            import traceback
+            self.get_logger().error(f'Error en servicio multi-motor de velocidad: {str(e)}')
+            self.get_logger().error(traceback.format_exc())
+            response.success = False
+            response.message = f"Error: {str(e)}"
+            response.previous_velocities = []
+            return response
 
     # Función para obtener las posiciones actuales de los motores
     def handle_get_motor_positions(self, request, response):
@@ -608,6 +773,79 @@ class WestwoodMotorServer(Node):
             response.success = False
             response.message = f"Error: {str(e)}"
             response.positions = []
+            return response
+        
+    # Función para obtener las velocidades actuales de los motores
+    def handle_get_motor_velocities(self, request, response):
+        """Callback para obtener las velocidades actuales de los motores especificados"""
+        try:
+            # Si no hay motores especificados, utilizar todos los motores configurados
+            motor_ids = request.motor_ids
+            if not motor_ids or len(motor_ids) == 0:
+                motor_ids = self.get_all_motor_ids()
+                
+            velocities = []
+            connected_motors = []
+            failed_motor_ids = []
+            
+            # Intentar obtener velocidades reales
+            for motor_id in motor_ids:
+                manager, local_id = self.get_manager_for_motor(motor_id)
+                
+                if manager is None:
+                    failed_motor_ids.append(motor_id)
+                    velocities.append(0.0)
+                    self.get_logger().warning(f'No se encontró manager para motor {motor_id}')
+                    continue
+                
+                try:
+                    ping_result = self.ping_motor(motor_id)
+                    if ping_result:
+                        connected_motors.append(motor_id)
+                        # Obtener velocidad actual del motor
+                        velocity_result = manager.get_present_velocity(local_id)
+                        if velocity_result and len(velocity_result) > 0:
+                            current_velocity = float(velocity_result[0][0][0])
+                            velocities.append(current_velocity)
+                            self.get_logger().info(f'Motor {motor_id} (local {local_id}): velocidad actual {current_velocity}')
+                        else:
+                            velocities.append(0.0)  # Valor por defecto si no se pudo leer
+                            failed_motor_ids.append(motor_id)
+                            self.get_logger().warning(f'No se pudo leer la velocidad del motor {motor_id}')
+                    else:
+                        failed_motor_ids.append(motor_id)
+                        velocities.append(0.0)  # Valor por defecto para motores desconectados
+                        self.get_logger().warning(f'Motor {motor_id} no responde')
+                except Exception as e:
+                    self.get_logger().error(f'Error al leer velocidad del motor {motor_id}: {str(e)}')
+                    failed_motor_ids.append(motor_id)
+                    velocities.append(0.0)
+            
+            # Si no pudimos obtener velocidades reales, es un error
+            if not velocities:
+                response.success = False
+                response.message = "No se pudieron leer las velocidades de los motores"
+                response.velocities = []
+                return response
+            
+            # Asegurarse de que tenemos una velocidad para cada motor solicitado
+            while len(velocities) < len(motor_ids):
+                velocities.append(0.0)
+
+            # Preparar respuesta
+            response.success = True
+            if connected_motors:
+                response.message = f"Velocidades leídas para {len(connected_motors)} motores"
+            else:
+                response.message = "No se pudieron leer velocidades"
+            response.velocities = velocities
+            return response
+        
+        except Exception as e:
+            self.get_logger().error(f'Error en servicio de lectura de velocidades: {str(e)}')
+            response.success = False
+            response.message = f"Error: {str(e)}"
+            response.velocities = []
             return response
 
     # Función para obtener las IDs de los motores disponibles
