@@ -253,7 +253,12 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             if future_pos.done():
                 result_pos = future_pos.result()
                 if result_pos.success:
+                    old_pos = self.current_positions[0] if len(self.current_positions) > 0 else 0.0
                     self.current_positions = list(result_pos.positions)
+                    
+                    # Debug si cambió la posición
+                    if abs(self.current_positions[0] - old_pos) > 0.01:
+                        self.node.get_logger().info(f"🎯 Motor posición: {self.current_positions[0]:.3f} (cambio: {self.current_positions[0] - old_pos:+.3f})")
             
             # Obtener velocidades
             req_vel = GetMotorVelocities.Request()
@@ -296,7 +301,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 self._send_count = 0
             self._send_count += 1
             
-            if self._send_count % 100 == 0:
+            if self._send_count % 10 == 0:  # Más frecuente para debug
                 self.node.get_logger().info(f"📤 Enviando posición {pos_to_send[0]:.3f} a {self.remote_ip}:{self.receive_port}")
             
         except Exception as e:
@@ -319,7 +324,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 self._receive_count = 0
             self._receive_count += 1
             
-            if self._receive_count % 100 == 0:
+            if self._receive_count % 10 == 0:  # Más frecuente para debug
                 self.node.get_logger().info(f"📥 Recibido posición {struct_data[0]:.3f} de {addr}")
                 
         except socket.timeout:
@@ -392,7 +397,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 self._current_send_count = 0
             self._current_send_count += 1
             
-            if self._current_send_count % 100 == 0:
+            if self._current_send_count % 10 == 0:  # Más frecuente para debug
                 curr_str = ", ".join([f"I{i}={c:.3f}" for i, c in enumerate(currents)])
                 self.node.get_logger().info(f"⚡ Enviando corrientes: [{curr_str}]")
             
@@ -412,27 +417,39 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
 
     def initialise(self) -> None:
         """Inicializar teleoperación remota"""
-        self.node.get_logger().info(f"Iniciando teleoperación remota para motores {self.motor_ids}")
-        self.node.get_logger().info(f"🌐 Red: {self.remote_ip}:{self.send_port} → {self.local_ip}:{self.send_port}")
+        self.node.get_logger().info(f"🚀 INICIO: Iniciando teleoperación remota para motores {self.motor_ids}")
+        self.node.get_logger().info(f"🌐 Red: {self.remote_ip}:{self.send_port} → {self.local_ip}:{self.receive_port}")
         self.node.get_logger().info("🎮 Control: [ENTER] para terminar")
         
         self.running = True
         
         # Configuración inicial
+        self.node.get_logger().info("📍 Paso 1: Enviando a posición cero...")
         if not self.zero_position():
-            self.node.get_logger().warning("Error en posición cero, continuando...")
+            self.node.get_logger().warning("⚠️ Error en posición cero, continuando...")
+        else:
+            self.node.get_logger().info("✅ Posición cero OK")
         
+        self.node.get_logger().info("⏳ Esperando 2 segundos...")
         time.sleep(2)
         
+        self.node.get_logger().info("🔧 Paso 2: Configurando control de corriente...")
         if not self.setup_current_control():
-            self.node.get_logger().error("Error configurando control de corriente")
+            self.node.get_logger().error("❌ Error configurando control de corriente")
             self.running = False
             return
+        else:
+            self.node.get_logger().info("✅ Control de corriente OK")
         
+        self.node.get_logger().info("🌐 Paso 3: Configurando comunicación UDP...")
         if not self.setup_udp_communication():
-            self.node.get_logger().error("Error configurando comunicación UDP")
+            self.node.get_logger().error("❌ Error configurando comunicación UDP")
             self.running = False
             return
+        else:
+            self.node.get_logger().info("✅ UDP configurado correctamente")
+            
+        self.node.get_logger().info("🎯 Inicialización completa, entrando al bucle principal...")
 
     def update(self) -> py_trees.common.Status:
         """Bucle principal de teleoperación remota"""
@@ -456,6 +473,13 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             # Obtener estados actuales
             if not self.get_motor_states():
                 self.communication_error_count += 1
+                if hasattr(self, '_error_counter'):
+                    self._error_counter += 1
+                else:
+                    self._error_counter = 1
+                    
+                if self._error_counter % 100 == 0:
+                    self.node.get_logger().warning(f"❌ Error obteniendo estados del motor {self._error_counter} veces")
                 return py_trees.common.Status.RUNNING
             
             # Comunicación UDP en hilos separados

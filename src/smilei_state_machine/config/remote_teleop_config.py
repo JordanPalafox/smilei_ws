@@ -43,9 +43,9 @@ RECEIVE_PORT = 4000
 # ================================
 # Cambie estos valores según la máquina actual
 
-# Para Máquina A:
-LOCAL_IP = LOCAL_IP_A
-REMOTE_IP = REMOTE_IP_A
+# Para Máquina A (192.168.4.241):
+LOCAL_IP = '192.168.4.241'   # Esta máquina
+REMOTE_IP = '192.168.4.238'  # Máquina remota
 
 # Para Máquina B (descomente las siguientes líneas):
 # LOCAL_IP = LOCAL_IP_B
