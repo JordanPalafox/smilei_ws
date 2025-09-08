@@ -1,0 +1,6 @@
+int32[] motor_ids
+float32[] target_velocities
+---
+bool success
+string message
+float32[] previous_velocities
