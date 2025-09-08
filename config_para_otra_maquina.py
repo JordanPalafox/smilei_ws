@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
-Configuración simple para teleoperación remota
+ARCHIVO PARA LA OTRA MÁQUINA (192.168.4.238)
 
-INSTRUCCIONES:
-1. En tu máquina: usa IS_MACHINE_A = True
-2. En la otra máquina: usa IS_MACHINE_A = False  
-3. Ajusta las IPs según tu red
+Copie TODO este contenido a:
+src/smilei_state_machine/config/remote_teleop_config.py
+
+Luego ejecute:
+colcon build --packages-select smilei_state_machine
+source install/setup.bash
+ros2 run smilei_state_machine send_state_command remote_teleoperation
 """
 
 # ================================
@@ -13,11 +16,11 @@ INSTRUCCIONES:
 # ================================
 
 # ¿Esta es la máquina A? (True/False)
-IS_MACHINE_A = True
+IS_MACHINE_A = False  # <<<< CAMBIO PRINCIPAL: False para máquina B
 
 # IPs de las máquinas
-MACHINE_A_IP = '192.168.4.241'  # Tu máquina
-MACHINE_B_IP = '192.168.4.238'  # Otra máquina
+MACHINE_A_IP = '192.168.4.241'  # Tu máquina original
+MACHINE_B_IP = '192.168.4.238'  # Esta máquina
 
 # IDs de motores (lista de enteros)
 MOTOR_IDS = [1]

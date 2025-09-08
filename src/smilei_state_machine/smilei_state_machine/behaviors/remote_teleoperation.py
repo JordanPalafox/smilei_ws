@@ -66,37 +66,60 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         config_loaded = False
         if CONFIG_AVAILABLE:
             try:
-                net_config = get_network_config()
-                motor_config = get_motor_config()
-                comm_config = get_communication_config()
+                # Importar la configuración
+                import importlib
+                import sys
+                config_path = str(Path(__file__).parent.parent.parent / "config")
+                if config_path not in sys.path:
+                    sys.path.insert(0, config_path)
                 
-                self.motor_ids = motor_ids if motor_ids is not None else motor_config['motor_ids']
-                self.remote_ip = remote_ip or net_config['remote_ip']
-                self.local_ip = local_ip or net_config['local_ip']
-                self.send_port = send_port or net_config['send_port']
-                self.receive_port = receive_port or net_config['receive_port']
+                # Recargar el módulo para obtener cambios frescos
+                import remote_teleop_config
+                importlib.reload(remote_teleop_config)
+                
+                net_config = remote_teleop_config.get_network_config()
+                motor_config = remote_teleop_config.get_motor_config()
+                comm_config = remote_teleop_config.get_communication_config()
+                
+                # Usar configuración del archivo (ignore parámetros del constructor)
+                self.motor_ids = motor_config['motor_ids']
+                self.remote_ip = net_config['remote_ip']
+                self.local_ip = net_config['local_ip']
+                self.send_port = net_config['send_port']
+                self.receive_port = net_config['receive_port']
                 self.max_communication_errors = comm_config['max_errors']
                 
-                print(f"🔧 CONFIG: Cargando desde archivo - Local: {self.local_ip}, Remote: {self.remote_ip}")
+                # Debug detallado de configuración
+                machine_type = "A" if remote_teleop_config.IS_MACHINE_A else "B"
+                print(f"✅ CONFIG: Máquina {machine_type} cargada desde archivo")
+                print(f"   Local: {self.local_ip}:{self.receive_port} (recibe)")
+                print(f"   Remote: {self.remote_ip}:{self.send_port} (envía)")
+                print(f"   Motores: {self.motor_ids}")
                 
                 # Ganancias desde configuración
                 RemoteTeleoperationGains.kp = motor_config['control_gains']['kp'][:len(self.motor_ids)]
                 RemoteTeleoperationGains.kd = motor_config['control_gains']['kd'][:len(self.motor_ids)]
                 config_loaded = True
+                
             except Exception as e:
-                print(f"⚠️ CONFIG: Error cargando configuración: {e}, usando valores por defecto")
+                print(f"❌ CONFIG: Error cargando configuración: {e}")
+                print(f"   Usando valores por defecto")
+                import traceback
+                traceback.print_exc()
                 config_loaded = False
         
         if not config_loaded:
             # Valores por defecto si no hay configuración - Máquina A
             self.motor_ids = motor_ids if motor_ids is not None else [1]
-            self.remote_ip = remote_ip or '192.168.4.238'  # IP corregida
-            self.local_ip = local_ip or '192.168.4.241'   # IP corregida
-            self.send_port = send_port or 4000     # A envía al puerto 4000 de B
-            self.receive_port = receive_port or 5001  # A recibe en puerto 5001
+            self.remote_ip = remote_ip or '192.168.4.238'
+            self.local_ip = local_ip or '192.168.4.241'
+            self.send_port = send_port or 4000
+            self.receive_port = receive_port or 5001
             self.max_communication_errors = 10
-            print(f"🔧 CONFIG: Usando valores por defecto - Local: {self.local_ip}, Remote: {self.remote_ip}")
-            print(f"🔧 CONFIG: Puertos - Envío: {self.send_port}, Recepción: {self.receive_port}")
+            print(f"⚠️ CONFIG: Usando valores por defecto (Máquina A)")
+            print(f"   Local: {self.local_ip}:{self.receive_port} (recibe)")
+            print(f"   Remote: {self.remote_ip}:{self.send_port} (envía)")
+            print(f"   Motores: {self.motor_ids}")
         
         # Sockets UDP
         self.send_socket = None
