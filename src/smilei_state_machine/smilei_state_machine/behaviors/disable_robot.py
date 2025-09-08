@@ -109,17 +109,14 @@ class DisableRobot(py_trees.behaviour.Behaviour):
 
     def update(self) -> py_trees.common.Status:
         if self.flag:
-            # Primero enviar a posición home
-            self.home_position()
-        
-        # Deshabilitar torque
-        result = self.disable_torque()
-        
-        # Marcar como completado
-        self.flag = False
-        
-        self.node.get_logger().info("Robot deshabilitado correctamente")
-        time.sleep(1.0)
+            # Solo deshabilitar torque sin mover los motores
+            result = self.disable_torque()
+            
+            # Marcar como completado
+            self.flag = False
+            
+            self.node.get_logger().info("Robot deshabilitado correctamente")
+            time.sleep(1.0)
         
         # Este comportamiento siempre termina con éxito
         return py_trees.common.Status.SUCCESS

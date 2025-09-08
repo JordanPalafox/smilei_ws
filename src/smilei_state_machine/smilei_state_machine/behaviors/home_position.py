@@ -33,7 +33,7 @@ class HomePosition(py_trees.behaviour.Behaviour):
 
     def initialise(self) -> None:
         # Simplificado: Posición por defecto para cada motor es 1.5707 (90 grados)
-        target_positions = [1.5707] * len(self.motor_ids)
+        target_positions = [0.0,1.5707,-1.5707,-0.785,0.0,-1.5707,1.5707,-0.785]
 
         req = SetMotorIdAndTarget.Request()
         req.motor_ids = self.motor_ids
