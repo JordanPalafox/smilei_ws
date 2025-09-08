@@ -34,9 +34,13 @@ REMOTE_IP_A = '192.168.4.238'  # Cambiar XXX por la IP de la máquina B
 LOCAL_IP_B = '192.168.4.238'   # IP real de la máquina B
 REMOTE_IP_B = '192.168.4.241'
 
-# Puertos UDP (deben ser diferentes para evitar conflictos)
-SEND_PORT = 5005
-RECEIVE_PORT = 4000
+# Puertos UDP - máquina A envía al 4000, recibe en 5001
+SEND_PORT_A = 4000      # A envía a este puerto en máquina B  
+RECEIVE_PORT_A = 5001   # A recibe en este puerto
+
+# Puertos UDP - máquina B envía al 5001, recibe en 4000  
+SEND_PORT_B = 5001      # B envía a este puerto en máquina A
+RECEIVE_PORT_B = 4000   # B recibe en este puerto
 
 # ================================
 # CONFIGURACIÓN ACTUAL
@@ -44,12 +48,16 @@ RECEIVE_PORT = 4000
 # Cambie estos valores según la máquina actual
 
 # Para Máquina A (192.168.4.241):
-LOCAL_IP = '192.168.4.241'   # Esta máquina
-REMOTE_IP = '192.168.4.238'  # Máquina remota
+LOCAL_IP = '192.168.4.241'       # Esta máquina
+REMOTE_IP = '192.168.4.238'      # Máquina remota
+SEND_PORT = SEND_PORT_A          # Enviar al puerto 4000
+RECEIVE_PORT = RECEIVE_PORT_A    # Recibir en puerto 5001
 
 # Para Máquina B (descomente las siguientes líneas):
 # LOCAL_IP = LOCAL_IP_B
-# REMOTE_IP = REMOTE_IP_B
+# REMOTE_IP = REMOTE_IP_B  
+# SEND_PORT = SEND_PORT_B         # Enviar al puerto 5001
+# RECEIVE_PORT = RECEIVE_PORT_B   # Recibir en puerto 4000
 
 # ================================
 # CONFIGURACIÓN DE MOTORES

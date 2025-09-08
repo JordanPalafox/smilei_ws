@@ -13,7 +13,7 @@ def test_send():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     
     # Configuración de red (usar las IPs de tu config)
-    local_ip = '192.168.4.241'
+    local_ip = '0.0.0.0'
     remote_ip = '192.168.4.238' 
     port = 4000
     
@@ -42,8 +42,8 @@ def test_receive():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     
     # Configuración de red - usar IP de esta máquina
-    local_ip = '192.168.4.241'  # Tu máquina actual
-    port = 4000
+    local_ip = '0.0.0.0'  # Tu máquina actual
+    port = 5001
     
     print(f"🎧 Escuchando en {local_ip}:{port}")
     

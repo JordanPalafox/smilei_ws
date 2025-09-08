@@ -88,14 +88,15 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 config_loaded = False
         
         if not config_loaded:
-            # Valores por defecto si no hay configuración
+            # Valores por defecto si no hay configuración - Máquina A
             self.motor_ids = motor_ids if motor_ids is not None else [1]
             self.remote_ip = remote_ip or '192.168.4.238'  # IP corregida
             self.local_ip = local_ip or '192.168.4.241'   # IP corregida
-            self.send_port = send_port or 5005
-            self.receive_port = receive_port or 4000
+            self.send_port = send_port or 4000     # A envía al puerto 4000 de B
+            self.receive_port = receive_port or 5001  # A recibe en puerto 5001
             self.max_communication_errors = 10
             print(f"🔧 CONFIG: Usando valores por defecto - Local: {self.local_ip}, Remote: {self.remote_ip}")
+            print(f"🔧 CONFIG: Puertos - Envío: {self.send_port}, Recepción: {self.receive_port}")
         
         # Sockets UDP
         self.send_socket = None
@@ -175,7 +176,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.receive_socket.bind((self.local_ip, self.receive_port))
             self.receive_socket.settimeout(0.001)
             
-            self.node.get_logger().info(f"UDP configurado: Envío hacia {self.remote_ip}:{self.receive_port}, "
+            self.node.get_logger().info(f"UDP configurado: Envío hacia {self.remote_ip}:{self.send_port}, "
                                       f"Recepción en {self.local_ip}:{self.receive_port}")
             return True
         except Exception as e:
@@ -303,8 +304,8 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 pos_to_send.extend([0.0] * (8 - len(pos_to_send)))
             
             struct_data = struct.pack('8f', *pos_to_send[:8])
-            # Enviar al puerto de recepción de la máquina remota
-            self.send_socket.sendto(struct_data, (self.remote_ip, self.receive_port))
+            # Enviar al puerto correcto de la máquina remota
+            self.send_socket.sendto(struct_data, (self.remote_ip, self.send_port))
             
             # Debug cada 100 envíos
             if not hasattr(self, '_send_count'):
@@ -312,7 +313,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self._send_count += 1
             
             if self._send_count % 10 == 0:  # Más frecuente para debug
-                self.node.get_logger().info(f"📤 Enviando posición {pos_to_send[0]:.3f} a {self.remote_ip}:{self.receive_port}")
+                self.node.get_logger().info(f"📤 Enviando posición {pos_to_send[0]:.3f} a {self.remote_ip}:{self.send_port}")
             
         except Exception as e:
             self.node.get_logger().warning(f"Error enviando posiciones: {str(e)}")
