@@ -19,6 +19,8 @@ class SayHello(py_trees.behaviour.Behaviour):
         self.running = False
         self.own_node = False
         self.last_time = time.time()
+        self.zero_position_sent = False
+        self.zero_position_future = None
 
     def setup(self, timeout_sec=None, **kwargs) -> bool:
         # Usar el nodo proporcionado en lugar de crear uno nuevo
@@ -60,6 +62,8 @@ class SayHello(py_trees.behaviour.Behaviour):
         self.node.get_logger().info("Iniciando comportamiento Say Hello")
         self.running = True
         self.last_time = time.time()
+        self.zero_position_sent = False
+        self.zero_position_future = None
 
     def update(self) -> py_trees.common.Status:
         # Si no está corriendo, devolver SUCCESS para permitir la transición al siguiente estado
@@ -74,21 +78,52 @@ class SayHello(py_trees.behaviour.Behaviour):
                 self.running = False
                 return py_trees.common.Status.SUCCESS
         
-        # Calcular posiciones sinusoidales
-        current_time = time.time()
-        qd = 0.5 * math.sin(10.0 * current_time) - 1.0
+        # Primero enviar todos los motores a posición cero como en PyBEAR (zero_position())
+        if not self.zero_position_sent:
+            self.node.get_logger().info("Enviando todos los motores a posición cero")
+            zero_positions = [0.0] * len(self.motor_ids)
+            
+            req = SetMotorIdAndTarget.Request()
+            req.motor_ids = self.motor_ids
+            req.target_positions = zero_positions
+            
+            try:
+                self.zero_position_future = self.set_position_client.call_async(req)
+                self.zero_position_sent = True
+                return py_trees.common.Status.RUNNING
+            except Exception as e:
+                self.node.get_logger().error(f"Error al enviar a posición cero: {str(e)}")
+                return py_trees.common.Status.FAILURE
         
-        # Lista para almacenar los IDs de motores y sus posiciones
+        # Verificar si la posición cero se completó
+        if self.zero_position_future and not self.zero_position_future.done():
+            return py_trees.common.Status.RUNNING
+        
+        # Una vez en cero, proceder con el movimiento sinusoidal
+        # Calcular posición sinusoidal como en PyBEAR
+        seconds = time.time()
+        qd = 0.22 * math.sin(12.0 * seconds) - 1
+        
+        # Determinar qué motores mover basado en la lógica de PyBEAR
+        # En PyBEAR: m_id_4 para brazo derecho y m_id_8 para brazo izquierdo
+        # En nuestro caso: último motor de cada brazo
         motor_ids_to_move = []
         target_positions = []
         
-        # Si tenemos al menos 2 motores, mover en direcciones opuestas
-        if len(self.motor_ids) >= 2:
-            motor_ids_to_move = [self.motor_ids[0], self.motor_ids[-1]]
-            target_positions = [-qd, qd]  # Movimiento opuesto
-        # Si solo tenemos 1 motor, moverlo de todas formas
-        elif len(self.motor_ids) == 1:
-            motor_ids_to_move = [self.motor_ids[0]]
+        if len(self.motor_ids) >= 4:
+            # Asumiendo que la primera mitad son brazo derecho, segunda mitad brazo izquierdo
+            mid_point = len(self.motor_ids) // 2
+            
+            # Último motor del brazo derecho (equivalente a m_id_4)
+            right_arm_last = self.motor_ids[mid_point - 1]
+            # Último motor del brazo izquierdo (equivalente a m_id_8)  
+            left_arm_last = self.motor_ids[-1]
+            
+            motor_ids_to_move = [right_arm_last, left_arm_last]
+            target_positions = [qd, qd]  # Mismo movimiento para ambos brazos
+        elif len(self.motor_ids) >= 1:
+            # Si hay pocos motores, usar el último disponible
+            motor_ids_to_move = [self.motor_ids[-1]]
             target_positions = [qd]
         
         # Si tenemos motores para mover
@@ -114,11 +149,8 @@ class SayHello(py_trees.behaviour.Behaviour):
         else:
             self.node.get_logger().warning("No hay motores para el comportamiento Say Hello")
         
-        # Pequeña pausa para no saturar el sistema
-        if current_time - self.last_time < 0.01:
-            time.sleep(0.01 - (current_time - self.last_time))
-        
-        self.last_time = time.time()
+        # Pausa de 0.01 segundos como en PyBEAR
+        time.sleep(0.01)
         
         # Siempre devuelve RUNNING mientras está activo
         return py_trees.common.Status.RUNNING

@@ -32,16 +32,18 @@ class ZeroPosition(py_trees.behaviour.Behaviour):
         return self.client.wait_for_service(timeout_sec=timeout_sec)
 
     def initialise(self) -> None:
-        # Define zero positions for all 8 motors
-        zero_pos = np.zeros(len(self.motor_ids))
-        req = SetMotorIdAndTarget.Request()
-        req.motor_ids = self.motor_ids
-        req.target_positions = list(zero_pos)
-        self.future = self.client.call_async(req)
+        self.future = None
 
     def update(self) -> py_trees.common.Status:
         if self.future is None:
-            return py_trees.common.Status.FAILURE
+            # Define zero positions for all 8 motors
+            zero_pos = np.zeros(len(self.motor_ids))
+            req = SetMotorIdAndTarget.Request()
+            req.motor_ids = self.motor_ids
+            req.target_positions = list(zero_pos)
+            self.future = self.client.call_async(req)
+            return py_trees.common.Status.RUNNING
+        
         if self.future.done():
             result = self.future.result()
             return (py_trees.common.Status.SUCCESS
