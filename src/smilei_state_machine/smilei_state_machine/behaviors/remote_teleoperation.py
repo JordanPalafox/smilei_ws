@@ -63,6 +63,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         self.own_node = False
         
         # Cargar configuración desde archivo o usar valores por defecto
+        config_loaded = False
         if CONFIG_AVAILABLE:
             try:
                 net_config = get_network_config()
@@ -81,11 +82,12 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 # Ganancias desde configuración
                 RemoteTeleoperationGains.kp = motor_config['control_gains']['kp'][:len(self.motor_ids)]
                 RemoteTeleoperationGains.kd = motor_config['control_gains']['kd'][:len(self.motor_ids)]
+                config_loaded = True
             except Exception as e:
                 print(f"⚠️ CONFIG: Error cargando configuración: {e}, usando valores por defecto")
-                CONFIG_AVAILABLE = False
+                config_loaded = False
         
-        if not CONFIG_AVAILABLE:
+        if not config_loaded:
             # Valores por defecto si no hay configuración
             self.motor_ids = motor_ids if motor_ids is not None else [1]
             self.remote_ip = remote_ip or '192.168.4.238'  # IP corregida
