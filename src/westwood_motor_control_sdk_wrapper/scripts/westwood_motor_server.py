@@ -476,7 +476,7 @@ class WestwoodMotorServer(Node):
                         
                         # Configurar modo y límites
                         manager.set_mode((local_id, 2))  # Modo posición
-                        manager.set_limit_iq_max((local_id, 1.5))  # Límite de corriente
+                        manager.set_limit_iq_max((local_id, 3.0))  # Límite de corriente
                         
                         # Habilitar torque y mover
                         manager.set_torque_enable((local_id, 1))
