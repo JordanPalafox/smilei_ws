@@ -18,6 +18,7 @@ set(srv_files
   "srv/SetMotorIdAndTargetVelocity.srv"
   "srv/GetMotorPositions.srv"
   "srv/GetMotorVelocities.srv"
+  "srv/GetMotorCurrents.srv"
   "srv/GetAvailableMotors.srv"
   "srv/SetGains.srv"
   "srv/SetMode.srv"
