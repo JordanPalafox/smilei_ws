@@ -4,25 +4,8 @@ import time
 import sys
 import select
 from westwood_motor_interfaces.srv import SetMotorIdAndTarget, GetMotorPositions
-from westwood_motor_interfaces.srv import SetGains, SetMode, SetTorqueEnable
+from westwood_motor_interfaces.srv import SetMode, SetTorqueEnable
 
-# Clases de ganancias ya no necesitamos CurrentControlGains
-
-class PositionControlGains:
-    """
-    Ganancias para control de posición
-    """
-    p_gain_position = 2.0
-    d_gain_position = 0.1
-    i_gain_position = 0.0
-    iq_max = 1.5
-    p_gain_iq = 0.02
-    i_gain_iq = 0.0
-    d_gain_iq = 0.0
-    p_gain_id = 0.02
-    i_gain_id = 0.0
-    d_gain_id = 0.0
-    kt = 0.35
 
 class LocalTeleoperation(py_trees.behaviour.Behaviour):
     """Comportamiento simplificado de teleoperación local para motores configurables"""
@@ -36,7 +19,6 @@ class LocalTeleoperation(py_trees.behaviour.Behaviour):
         # Clientes para servicios (solo necesitamos posición y configuración)
         self.set_position_client = None
         self.get_position_client = None
-        self.set_gains_client = None
         self.set_mode_client = None
         self.set_torque_client = None
         
@@ -73,10 +55,6 @@ class LocalTeleoperation(py_trees.behaviour.Behaviour):
             'westwood_motor/get_motor_positions'
         )
         
-        self.set_gains_client = self.node.create_client(
-            SetGains,
-            'westwood_motor/set_position_gains'
-        )
         
         self.set_mode_client = self.node.create_client(
             SetMode,
@@ -136,24 +114,6 @@ class LocalTeleoperation(py_trees.behaviour.Behaviour):
         self.node.get_logger().info(f"Configurando motores {self.motor_ids} para control de posición")
         
         try:
-            # Configurar ganancias para control de posición
-            req_gains = SetGains.Request()
-            req_gains.motor_ids = self.motor_ids
-            req_gains.p_gain_position = float(PositionControlGains.p_gain_position)
-            req_gains.i_gain_position = float(PositionControlGains.i_gain_position)
-            req_gains.d_gain_position = float(PositionControlGains.d_gain_position)
-            req_gains.p_gain_iq = float(PositionControlGains.p_gain_iq)
-            req_gains.i_gain_iq = float(PositionControlGains.i_gain_iq)
-            req_gains.d_gain_iq = float(PositionControlGains.d_gain_iq)
-            req_gains.p_gain_id = float(PositionControlGains.p_gain_id)
-            req_gains.i_gain_id = float(PositionControlGains.i_gain_id)
-            req_gains.d_gain_id = float(PositionControlGains.d_gain_id)
-            req_gains.iq_max = float(PositionControlGains.iq_max)
-            req_gains.kt = float(PositionControlGains.kt)
-            
-            future = self.set_gains_client.call_async(req_gains)
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
-            
             # Configurar modo posición (modo 2)
             req_mode = SetMode.Request()
             req_mode.motor_ids = self.motor_ids
@@ -343,23 +303,6 @@ class LocalTeleoperation(py_trees.behaviour.Behaviour):
         self.node.get_logger().info(f"Restaurando control de posición para motores {self.motor_ids}")
         
         try:
-            req_gains = SetGains.Request()
-            req_gains.motor_ids = self.motor_ids
-            req_gains.p_gain_position = float(PositionControlGains.p_gain_position)
-            req_gains.i_gain_position = float(PositionControlGains.i_gain_position)
-            req_gains.d_gain_position = float(PositionControlGains.d_gain_position)
-            req_gains.p_gain_iq = float(PositionControlGains.p_gain_iq)
-            req_gains.i_gain_iq = float(PositionControlGains.i_gain_iq)
-            req_gains.d_gain_iq = float(PositionControlGains.d_gain_iq)
-            req_gains.p_gain_id = float(PositionControlGains.p_gain_id)
-            req_gains.i_gain_id = float(PositionControlGains.i_gain_id)
-            req_gains.d_gain_id = float(PositionControlGains.d_gain_id)
-            req_gains.iq_max = float(PositionControlGains.iq_max)
-            req_gains.kt = float(PositionControlGains.kt)
-            
-            future = self.set_gains_client.call_async(req_gains)
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
-            
             # Configurar modo posición (modo 2)
             req_mode = SetMode.Request()
             req_mode.motor_ids = self.motor_ids
