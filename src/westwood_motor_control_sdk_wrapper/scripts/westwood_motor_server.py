@@ -4,7 +4,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
-from westwood_motor_interfaces.srv import SetMotorIdAndTarget, SetMotorIdAndTargetVelocity, GetMotorPositions, GetMotorVelocities, GetAvailableMotors
+from westwood_motor_interfaces.srv import SetMotorIdAndTarget, SetMotorIdAndTargetVelocity, GetMotorPositions, GetMotorVelocities, GetAvailableMotors, GetMotorCurrents
 from westwood_motor_interfaces.srv import SetGains, SetMode, SetTorqueEnable, SetGoalIq
 import sys
 import os
@@ -363,6 +363,13 @@ class WestwoodMotorServer(Node):
             GetMotorVelocities,
             'westwood_motor/get_motor_velocities',
             self.handle_get_motor_velocities
+        )
+
+        # Añadir servicio para obtener corrientes actuales de motores
+        self.get_motor_currents_service = self.create_service(
+            GetMotorCurrents,
+            'westwood_motor/get_motor_currents',
+            self.handle_get_motor_currents
         )
         
         # Añadir servicio para obtener IDs de motores disponibles
@@ -895,6 +902,79 @@ class WestwoodMotorServer(Node):
             response.message = f"Error: {str(e)}"
             response.motor_ids = []
             
+            return response
+        
+    # Función para obtener las corrientes actuales de los motores
+    def handle_get_motor_currents(self, request, response):
+        """Callback para obtener las corrientes actuales de los motores especificados"""
+        try:
+            # Si no hay motores especificados, utilizar todos los motores configurados
+            motor_ids = request.motor_ids
+            if not motor_ids or len(motor_ids) == 0:
+                motor_ids = self.get_all_motor_ids()
+                
+            currents = []
+            connected_motors = []
+            failed_motor_ids = []
+            
+            # Intentar obtener corrientes reales
+            for motor_id in motor_ids:
+                manager, local_id = self.get_manager_for_motor(motor_id)
+                
+                if manager is None:
+                    failed_motor_ids.append(motor_id)
+                    currents.append(0.0)
+                    self.get_logger().warning(f'No se encontró manager para motor {motor_id}')
+                    continue
+                
+                try:
+                    ping_result = self.ping_motor(motor_id)
+                    if ping_result:
+                        connected_motors.append(motor_id)
+                        # Obtener corriente actual del motor
+                        current_result = manager.get_present_iq(local_id)
+                        if current_result and len(current_result) > 0:
+                            current_current = float(current_result[0][0][0])
+                            currents.append(current_current)
+                            self.get_logger().info(f'Motor {motor_id} (local {local_id}): corriente actual {current_current}')
+                        else:
+                            currents.append(0.0)  # Valor por defecto si no se pudo leer
+                            failed_motor_ids.append(motor_id)
+                            self.get_logger().warning(f'No se pudo leer la corriente del motor {motor_id}')
+                    else:
+                        failed_motor_ids.append(motor_id)
+                        currents.append(0.0)  # Valor por defecto para motores desconectados
+                        self.get_logger().warning(f'Motor {motor_id} no responde')
+                except Exception as e:
+                    self.get_logger().error(f'Error al leer corriente del motor {motor_id}: {str(e)}')
+                    failed_motor_ids.append(motor_id)
+                    currents.append(0.0)
+            
+            # Si no pudimos obtener corrientes reales, es un error
+            if not currents:
+                response.success = False
+                response.message = "No se pudieron leer las corrientes de los motores"
+                response.currents = []
+                return response
+            
+            # Asegurarse de que tenemos una corriente para cada motor solicitado
+            while len(currents) < len(motor_ids):
+                currents.append(0.0)
+
+            # Preparar respuesta
+            response.success = True
+            if connected_motors:
+                response.message = f"Corrientes leídas para {len(connected_motors)} motores"
+            else:
+                response.message = "No se pudieron leer corrientes"
+            response.currents = currents
+            return response
+        
+        except Exception as e:
+            self.get_logger().error(f'Error en servicio de lectura de corrientes: {str(e)}')
+            response.success = False
+            response.message = f"Error: {str(e)}"
+            response.currents = []
             return response
             
     # Función para configurar las ganancias de control de posición

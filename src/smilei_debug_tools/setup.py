@@ -18,6 +18,7 @@ setup(
     entry_points={
         'console_scripts': [
             'velocity_publisher = smilei_debug_tools.velocity_publisher:main',
+            'motor_data_publisher = smilei_debug_tools.motor_data_publisher:main',
         ],
     },
 )
