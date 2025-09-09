@@ -58,9 +58,13 @@ install(
 
 # Install Python scripts
 install(
-  DIRECTORY scripts/
+  PROGRAMS
+  scripts/motor_stress_test.py
+  scripts/old_server.py
+  scripts/velocity_publisher.py
+  scripts/westwood_motor_server_semaforo.py
+  scripts/westwood_motor_server.py
   DESTINATION lib/${PROJECT_NAME}
-  USE_SOURCE_PERMISSIONS
 )
 
 
