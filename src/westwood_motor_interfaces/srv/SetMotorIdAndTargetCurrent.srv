@@ -1,0 +1,5 @@
+int32[] motor_ids
+float32[] target_currents
+---
+bool success
+string message

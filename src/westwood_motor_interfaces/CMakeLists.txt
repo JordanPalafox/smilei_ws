@@ -16,6 +16,7 @@ find_package(builtin_interfaces REQUIRED)
 set(srv_files
   "srv/SetMotorIdAndTarget.srv"
   "srv/SetMotorIdAndTargetVelocity.srv"
+  "srv/SetMotorIdAndTargetCurrent.srv"
   "srv/GetMotorPositions.srv"
   "srv/GetMotorVelocities.srv"
   "srv/GetMotorCurrents.srv"

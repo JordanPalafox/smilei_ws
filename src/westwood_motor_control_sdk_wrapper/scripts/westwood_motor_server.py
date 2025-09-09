@@ -4,7 +4,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
-from westwood_motor_interfaces.srv import SetMotorIdAndTarget, SetMotorIdAndTargetVelocity, GetMotorPositions, GetMotorVelocities, GetAvailableMotors, GetMotorCurrents
+from westwood_motor_interfaces.srv import SetMotorIdAndTarget, SetMotorIdAndTargetVelocity, SetMotorIdAndTargetCurrent, GetMotorPositions, GetMotorVelocities, GetAvailableMotors, GetMotorCurrents
 from westwood_motor_interfaces.srv import SetGains, SetMode, SetTorqueEnable, SetGoalIq
 import sys
 import os
@@ -412,6 +412,12 @@ class WestwoodMotorServer(Node):
             SetGoalIq,
             'westwood_motor/set_goal_iq',
             self.handle_set_goal_iq
+        )
+
+        self.set_motor_id_and_target_current_service = self.create_service(
+            SetMotorIdAndTargetCurrent,
+            'westwood_motor/set_motor_id_and_target_current',
+            self.handle_set_motor_id_and_target_current
         )
         
     # Función principal para manejar IDs de motores y sus posiciones objetivo
@@ -1330,6 +1336,86 @@ class WestwoodMotorServer(Node):
         except Exception as e:
             import traceback
             self.get_logger().error(f'Error en servicio de establecimiento de corriente iq: {str(e)}')
+            self.get_logger().error(traceback.format_exc())
+            response.success = False
+            response.message = f"Error: {str(e)}"
+            return response
+
+    def handle_set_motor_id_and_target_current(self, request, response):
+        """Callback to control multiple motors with individual target currents"""
+        try:
+            if not request.motor_ids or len(request.motor_ids) == 0:
+                response.success = False
+                response.message = "No motor IDs specified"
+                return response
+            
+            if len(request.motor_ids) != len(request.target_currents):
+                response.success = False
+                response.message = "The number of motor IDs does not match the number of target currents"
+                return response
+
+            successful_motors = []
+            failed_motor_ids = []
+
+            self.get_logger().info(f'Starting current control for motors: {request.motor_ids} to currents: {request.target_currents}')
+
+            for motor_id in request.motor_ids:
+                if not self.ping_motor(motor_id):
+                    failed_motor_ids.append(motor_id)
+                    self.get_logger().warning(f'Motor {motor_id} is not available')
+
+            available_motors = [m for m in request.motor_ids if m not in failed_motor_ids]
+
+            if available_motors:
+                self.get_logger().info(f'Available motors for control: {available_motors}')
+            else:
+                self.get_logger().warning(f'No motors responded. Failed: {failed_motor_ids}')
+
+            for motor_id in available_motors:
+                idx = request.motor_ids.index(motor_id)
+                manager, local_id = self.get_manager_for_motor(motor_id)
+
+                if manager is None:
+                    self.get_logger().error(f'No manager found for motor {motor_id}')
+                    failed_motor_ids.append(motor_id)
+                    continue
+
+                try:
+                    target_current = request.target_currents[idx]
+                    self.get_logger().info(f'Motor {motor_id}: setting target current {target_current:.3f}')
+
+                    # Set to current control mode (mode 0)
+                    manager.set_mode((local_id, 0))
+                    # Enable torque
+                    manager.set_torque_enable((local_id, 1))
+                    # Set goal current
+                    manager.set_goal_iq((local_id, target_current))
+
+                    successful_motors.append(motor_id)
+                    self.get_logger().info(f'Motor {motor_id} configured for current control')
+
+                except Exception as e:
+                    self.get_logger().error(f'Error configuring/controlling motor {motor_id}: {str(e)}')
+                    failed_motor_ids.append(motor_id)
+
+            total_requested = len(request.motor_ids)
+            total_successful = len(successful_motors)
+            total_failed = len(set(failed_motor_ids))
+
+            self.get_logger().info(f"Final stats: requested={total_requested}, successful={total_successful}, failed={total_failed}")
+
+            if total_successful > 0:
+                response.success = True
+                response.message = f"Successfully controlled {total_successful} motors: {successful_motors}"
+            else:
+                response.success = False
+                response.message = f"Failed to control any motors. Failed: {list(set(failed_motor_ids))}"
+
+            return response
+
+        except Exception as e:
+            import traceback
+            self.get_logger().error(f'Error in multi-motor current service: {str(e)}')
             self.get_logger().error(traceback.format_exc())
             response.success = False
             response.message = f"Error: {str(e)}"
