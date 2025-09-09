@@ -90,34 +90,3 @@ state_machine_node:
       socket_timeout: 0.001
       max_communication_errors: 10
       control_frequency: 1000
-    
-    # Ganancias para el modo de control de posición
-    position_control_gains:
-      p_gain_position: 5.0
-      d_gain_position: 0.2
-      i_gain_position: 0.0
-      iq_max: 1.5
-      p_gain_iq: 0.02
-      i_gain_iq: 0.02
-      d_gain_iq: 0.0
-      p_gain_id: 0.02
-      i_gain_id: 0.02
-      d_gain_id: 0.0
-      kt: 0.35
-
-    # Ganancias para el modo de control de corriente
-    current_control_gains:
-      p_gain_position: 0.0
-      d_gain_position: 0.0
-      i_gain_position: 0.0
-      p_gain_force: 0.0
-      d_gain_force: 0.0
-      i_gain_force: 0.0
-      iq_max: 3.0
-      p_gain_iq: 0.277
-      i_gain_iq: 0.061
-      d_gain_iq: 0.0
-      p_gain_id: 0.277
-      i_gain_id: 0.061
-      d_gain_id: 0.0
-      kt: 0.35 
