@@ -9,7 +9,7 @@ import threading
 import numpy as np
 from westwood_motor_interfaces.srv import (
     SetMotorIdAndTarget, GetMotorPositions, GetMotorVelocities,
-    SetGains, SetMode, SetTorqueEnable, SetGoalIq
+    SetMode, SetTorqueEnable, SetGoalIq
 )
 
 
@@ -37,9 +37,6 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         self.max_communication_errors = 10
         self.control_frequency = 1000
         
-        # Ganancias de motor (se cargan desde parámetros)
-        self.current_control_gains = None
-        self.position_control_gains = None
         
         # Sockets UDP
         self.send_socket = None
@@ -87,21 +84,6 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.node.declare_parameter('remote_teleoperation.control_gains.kp', [1.75] * 8)
             self.node.declare_parameter('remote_teleoperation.control_gains.kd', [0.1] * 8)
             
-            # Declarar parámetros de ganancias de control de corriente (no están declarados)
-            self.node.declare_parameter('current_control_gains.p_gain_position', 0.0)
-            self.node.declare_parameter('current_control_gains.d_gain_position', 0.0)
-            self.node.declare_parameter('current_control_gains.i_gain_position', 0.0)
-            self.node.declare_parameter('current_control_gains.p_gain_force', 0.0)
-            self.node.declare_parameter('current_control_gains.d_gain_force', 0.0)
-            self.node.declare_parameter('current_control_gains.i_gain_force', 0.0)
-            self.node.declare_parameter('current_control_gains.iq_max', 3.0)
-            self.node.declare_parameter('current_control_gains.p_gain_iq', 0.277)
-            self.node.declare_parameter('current_control_gains.i_gain_iq', 0.061)
-            self.node.declare_parameter('current_control_gains.d_gain_iq', 0.0)
-            self.node.declare_parameter('current_control_gains.p_gain_id', 0.277)
-            self.node.declare_parameter('current_control_gains.i_gain_id', 0.061)
-            self.node.declare_parameter('current_control_gains.d_gain_id', 0.0)
-            self.node.declare_parameter('current_control_gains.kt', 0.35)
             
             # Cargar valores de parámetros
             self.motor_ids = self.node.get_parameter('remote_teleoperation.motor_ids').value
@@ -120,37 +102,6 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 'kd': kd_list
             }
             
-            # Cargar ganancias de motor (current_control_gains recién declarados, position_control_gains ya existe)
-            self.current_control_gains = {
-                'p_gain_position': self.node.get_parameter('current_control_gains.p_gain_position').value,
-                'd_gain_position': self.node.get_parameter('current_control_gains.d_gain_position').value,
-                'i_gain_position': self.node.get_parameter('current_control_gains.i_gain_position').value,
-                'p_gain_force': self.node.get_parameter('current_control_gains.p_gain_force').value,
-                'd_gain_force': self.node.get_parameter('current_control_gains.d_gain_force').value,
-                'i_gain_force': self.node.get_parameter('current_control_gains.i_gain_force').value,
-                'iq_max': self.node.get_parameter('current_control_gains.iq_max').value,
-                'p_gain_iq': self.node.get_parameter('current_control_gains.p_gain_iq').value,
-                'i_gain_iq': self.node.get_parameter('current_control_gains.i_gain_iq').value,
-                'd_gain_iq': self.node.get_parameter('current_control_gains.d_gain_iq').value,
-                'p_gain_id': self.node.get_parameter('current_control_gains.p_gain_id').value,
-                'i_gain_id': self.node.get_parameter('current_control_gains.i_gain_id').value,
-                'd_gain_id': self.node.get_parameter('current_control_gains.d_gain_id').value,
-                'kt': self.node.get_parameter('current_control_gains.kt').value
-            }
-            
-            self.position_control_gains = {
-                'p_gain_position': self.node.get_parameter('position_control_gains.p_gain_position').value,
-                'd_gain_position': self.node.get_parameter('position_control_gains.d_gain_position').value,
-                'i_gain_position': self.node.get_parameter('position_control_gains.i_gain_position').value,
-                'iq_max': self.node.get_parameter('position_control_gains.iq_max').value,
-                'p_gain_iq': self.node.get_parameter('position_control_gains.p_gain_iq').value,
-                'i_gain_iq': self.node.get_parameter('position_control_gains.i_gain_iq').value,
-                'd_gain_iq': self.node.get_parameter('position_control_gains.d_gain_iq').value,
-                'p_gain_id': self.node.get_parameter('position_control_gains.p_gain_id').value,
-                'i_gain_id': self.node.get_parameter('position_control_gains.i_gain_id').value,
-                'd_gain_id': self.node.get_parameter('position_control_gains.d_gain_id').value,
-                'kt': self.node.get_parameter('position_control_gains.kt').value
-            }
             
             # Configurar IPs y puertos basado en qué máquina somos
             if is_machine_a:
@@ -182,8 +133,6 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             GetMotorPositions, 'westwood_motor/get_motor_positions')
         self.get_velocity_client = self.node.create_client(
             GetMotorVelocities, 'westwood_motor/get_motor_velocities')
-        self.set_gains_client = self.node.create_client(
-            SetGains, 'westwood_motor/set_position_gains')
         self.set_mode_client = self.node.create_client(
             SetMode, 'westwood_motor/set_mode')
         self.set_torque_client = self.node.create_client(
@@ -256,24 +205,6 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         self.node.get_logger().info(f"Configurando motores {self.motor_ids} para control de corriente")
         
         try:
-            # Configurar ganancias para control de corriente
-            req_gains = SetGains.Request()
-            req_gains.motor_ids = self.motor_ids
-            req_gains.p_gain_iq = float(self.current_control_gains['p_gain_iq'])
-            req_gains.i_gain_iq = float(self.current_control_gains['i_gain_iq'])
-            req_gains.d_gain_iq = float(self.current_control_gains['d_gain_iq'])
-            req_gains.p_gain_id = float(self.current_control_gains['p_gain_id'])
-            req_gains.i_gain_id = float(self.current_control_gains['i_gain_id'])
-            req_gains.d_gain_id = float(self.current_control_gains['d_gain_id'])
-            req_gains.p_gain_position = float(self.current_control_gains['p_gain_position'])
-            req_gains.i_gain_position = float(self.current_control_gains['i_gain_position'])
-            req_gains.d_gain_position = float(self.current_control_gains['d_gain_position'])
-            req_gains.iq_max = float(self.current_control_gains['iq_max'])
-            req_gains.kt = float(self.current_control_gains['kt'])
-            
-            future = self.set_gains_client.call_async(req_gains)
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
-            
             # Configurar modo corriente (modo 0)
             req_mode = SetMode.Request()
             req_mode.motor_ids = self.motor_ids
@@ -433,7 +364,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 kp = self.control_gains['kp'][i] if i < len(self.control_gains['kp']) else 1.75
                 kd = self.control_gains['kd'][i] if i < len(self.control_gains['kd']) else 0.1
                 
-                iq = (-kp * pos_error - kd * vel_error) / self.current_control_gains['kt']
+                iq = (-kp * pos_error - kd * vel_error) / 0.35  # kt fijo
                 currents.append(iq)
             else:
                 currents.append(0.0)
@@ -584,24 +515,6 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         self.node.get_logger().info("Restaurando control de posición")
         
         try:
-            # Restaurar ganancias de posición
-            req_gains = SetGains.Request()
-            req_gains.motor_ids = self.motor_ids
-            req_gains.p_gain_position = float(self.position_control_gains['p_gain_position'])
-            req_gains.i_gain_position = float(self.position_control_gains['i_gain_position'])
-            req_gains.d_gain_position = float(self.position_control_gains['d_gain_position'])
-            req_gains.p_gain_iq = float(self.position_control_gains['p_gain_iq'])
-            req_gains.i_gain_iq = float(self.position_control_gains['i_gain_iq'])
-            req_gains.d_gain_iq = float(self.position_control_gains['d_gain_iq'])
-            req_gains.p_gain_id = float(self.position_control_gains['p_gain_id'])
-            req_gains.i_gain_id = float(self.position_control_gains['i_gain_id'])
-            req_gains.d_gain_id = float(self.position_control_gains['d_gain_id'])
-            req_gains.iq_max = float(self.position_control_gains['iq_max'])
-            req_gains.kt = float(self.position_control_gains['kt'])
-            
-            future = self.set_gains_client.call_async(req_gains)
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
-            
             # Cambiar a modo posición
             req_mode = SetMode.Request()
             req_mode.motor_ids = self.motor_ids
