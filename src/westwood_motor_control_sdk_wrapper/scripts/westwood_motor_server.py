@@ -626,16 +626,16 @@ class WestwoodMotorServer(Node):
                         self.get_logger().info(f'🔧 Motor {motor_id}: velocidad actual {current_velocity:.3f} → objetivo {target_velocity:.3f}')
                         
                         # Configurar PID para el control de velocidad (optimizado - menos comandos)
-                        manager.set_p_gain_iq((local_id, 0.02))
-                        manager.set_i_gain_iq((local_id, 0.02))
+                        manager.set_p_gain_iq((local_id, 0.277))
+                        manager.set_i_gain_iq((local_id, 0.061))
                         manager.set_d_gain_iq((local_id, 0))
-                        manager.set_p_gain_id((local_id, 0.02))
-                        manager.set_i_gain_id((local_id, 0.02))
+                        manager.set_p_gain_id((local_id, 0.277))
+                        manager.set_i_gain_id((local_id, 0.061))
                         manager.set_d_gain_id((local_id, 0))
 
                         # PID velocity mode
-                        manager.set_p_gain_velocity((local_id, 0.05))
-                        manager.set_i_gain_velocity((local_id, 0.01))
+                        manager.set_p_gain_velocity((local_id, 0.2))
+                        manager.set_i_gain_velocity((local_id, 0.001))
                         manager.set_d_gain_velocity((local_id, 0.0))
                         
                         # Configurar modo y límites
