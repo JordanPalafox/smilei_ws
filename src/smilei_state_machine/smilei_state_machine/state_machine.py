@@ -9,6 +9,7 @@ from smilei_state_machine.behaviors.zero_position import ZeroPosition
 from smilei_state_machine.behaviors.enable_robot import EnableRobot
 from smilei_state_machine.behaviors.say_hello import SayHello
 from smilei_state_machine.behaviors.local_teleoperation import LocalTeleoperation
+from smilei_state_machine.behaviors.remote_teleoperation import RemoteTeleoperation
 from smilei_state_machine.behaviors.disable_robot import DisableRobot
 
 # Variable global para almacenar el comando actual
@@ -158,7 +159,7 @@ def main():
     )
 
     # Define the motor IDs to control
-    motor_ids = [1, 2, 3, 4, 5, 6, 7, 8]
+    motor_ids = [1]
 
     # Añadir estado idle para evitar advertencias
     node.get_logger().info(f"Iniciando la máquina de estados con motores: {motor_ids}")
@@ -202,6 +203,7 @@ def main():
     zero = ZeroPosition(name="GoZero", motor_ids=motor_ids, node=node)
     say_hello = SayHello(name="SayHello", motor_ids=motor_ids, node=node)
     teleoperation = LocalTeleoperation(name="LocalTeleoperation", motor_ids=motor_ids, node=node)
+    remote_teleoperation = RemoteTeleoperation(name="RemoteTeleoperation", motor_ids=motor_ids, node=node)
     disable = DisableRobot(name="DisableRobot", motor_ids=motor_ids, node=node)
 
     # Crear comportamiento raíz personalizado
@@ -215,6 +217,7 @@ def main():
     root.add_state("zero", zero)
     root.add_state("say_hello", say_hello)
     root.add_state("teleoperation", teleoperation)
+    root.add_state("remote_teleoperation", remote_teleoperation)
     root.add_state("disable", disable)
 
     # Crear el árbol de comportamiento

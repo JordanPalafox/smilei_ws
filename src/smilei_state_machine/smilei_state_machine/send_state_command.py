@@ -22,7 +22,7 @@ def main(args=None):
 
     if len(sys.argv) < 2:
         print("Uso: ros2 run smilei_state_machine send_state_command <comando>")
-        print("Comandos disponibles: home, zero, idle")
+        print("Comandos disponibles: enable, home, zero, say_hello, teleoperation, remote_teleoperation, disable, idle")
         node.destroy_node()
         rclpy.shutdown()
         return 1
