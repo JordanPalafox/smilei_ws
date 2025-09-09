@@ -3,7 +3,6 @@ import time
 import rclpy
 from rclpy.node import Node
 from westwood_motor_interfaces.srv import GetAvailableMotors
-from westwood_motor_interfaces.srv import SetGains
 from westwood_motor_interfaces.srv import SetMode
 from westwood_motor_interfaces.srv import SetTorqueEnable
 import numpy as np
@@ -23,31 +22,6 @@ class EnableRobot(py_trees.behaviour.Behaviour):
         self.node = node
         self.logger = self.node.get_logger()
         
-        # Leer parámetros de configuración desde el archivo de parámetros
-        self.node.declare_parameter('position_control_gains.p_gain_position', 5.0)
-        self.node.declare_parameter('position_control_gains.i_gain_position', 0.0)
-        self.node.declare_parameter('position_control_gains.d_gain_position', 0.2)
-        self.node.declare_parameter('position_control_gains.iq_max', 1.5)
-        self.node.declare_parameter('position_control_gains.p_gain_iq', 0.02)
-        self.node.declare_parameter('position_control_gains.i_gain_iq', 0.02)
-        self.node.declare_parameter('position_control_gains.d_gain_iq', 0.0)
-        self.node.declare_parameter('position_control_gains.p_gain_id', 0.02)
-        self.node.declare_parameter('position_control_gains.i_gain_id', 0.02)
-        self.node.declare_parameter('position_control_gains.d_gain_id', 0.0)
-        self.node.declare_parameter('position_control_gains.kt', 0.35)
-        
-        # Obtener parámetros
-        self.p_gain_position = self.node.get_parameter('position_control_gains.p_gain_position').value
-        self.i_gain_position = self.node.get_parameter('position_control_gains.i_gain_position').value
-        self.d_gain_position = self.node.get_parameter('position_control_gains.d_gain_position').value
-        self.iq_max = self.node.get_parameter('position_control_gains.iq_max').value
-        self.p_gain_iq = self.node.get_parameter('position_control_gains.p_gain_iq').value
-        self.i_gain_iq = self.node.get_parameter('position_control_gains.i_gain_iq').value
-        self.d_gain_iq = self.node.get_parameter('position_control_gains.d_gain_iq').value
-        self.p_gain_id = self.node.get_parameter('position_control_gains.p_gain_id').value
-        self.i_gain_id = self.node.get_parameter('position_control_gains.i_gain_id').value
-        self.d_gain_id = self.node.get_parameter('position_control_gains.d_gain_id').value
-        self.kt = self.node.get_parameter('position_control_gains.kt').value
         
         # Crear clientes para los servicios
         self.get_available_motors_client = self.node.create_client(
@@ -55,10 +29,6 @@ class EnableRobot(py_trees.behaviour.Behaviour):
             'westwood_motor/get_available_motors'
         )
         
-        self.set_position_gains_client = self.node.create_client(
-            SetGains, 
-            'westwood_motor/set_position_gains'
-        )
         
         self.set_mode_client = self.node.create_client(
             SetMode, 
@@ -80,7 +50,7 @@ class EnableRobot(py_trees.behaviour.Behaviour):
         Configuración inicial del comportamiento.
         """
         self.logger.info(f"{self.name} configurando...")
-        for client in [self.get_available_motors_client, self.set_position_gains_client, 
+        for client in [self.get_available_motors_client, 
                       self.set_mode_client, self.set_torque_enable_client]:
             if not client.wait_for_service(timeout_sec=1.0):
                 self.logger.error(f"Servicio {client.srv_name} no disponible")
@@ -124,40 +94,6 @@ class EnableRobot(py_trees.behaviour.Behaviour):
             self.available_motors = self.motor_ids
             return True
     
-    def set_position_gains(self):
-        """
-        Configurar las ganancias para el control de posición.
-        """
-        request = SetGains.Request()
-        request.motor_ids = self.motor_ids
-        request.p_gain_position = self.p_gain_position
-        request.i_gain_position = self.i_gain_position
-        request.d_gain_position = self.d_gain_position
-        request.p_gain_iq = self.p_gain_iq
-        request.i_gain_iq = self.i_gain_iq
-        request.d_gain_iq = self.d_gain_iq
-        request.p_gain_id = self.p_gain_id
-        request.i_gain_id = self.i_gain_id
-        request.d_gain_id = self.d_gain_id
-        request.iq_max = self.iq_max
-        request.kt = self.kt
-        
-        future = self.set_position_gains_client.call_async(request)
-        rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
-        
-        if future.done():
-            response = future.result()
-            if response.success:
-                self.logger.info(f"Ganancias de posición configuradas: {response.message}")
-                return True
-            else:
-                self.logger.error(f"Error al configurar ganancias de posición: {response.message}")
-                self.logger.warning("Continuando de todos modos...")
-                return True
-        else:
-            self.logger.error("No se recibió respuesta al configurar ganancias de posición")
-            self.logger.warning("Continuando de todos modos...")
-            return True
     
     def set_mode(self):
         """
@@ -232,11 +168,6 @@ class EnableRobot(py_trees.behaviour.Behaviour):
             if motor_id not in self.available_motors:
                 self.logger.warning(f"Motor {motor_id} no disponible")
         
-        # Configurar ganancias
-        if not self.set_position_gains():
-            self.logger.error("Error al configurar ganancias")
-            self.error = True
-            return py_trees.common.Status.FAILURE
         
         # Configurar modo
         if not self.set_mode():

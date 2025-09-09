@@ -32,7 +32,6 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         self.remote_ip = None  
         self.send_port = None
         self.receive_port = None
-        self.control_gains = None
         self.socket_timeout = 0.001
         self.max_communication_errors = 10
         self.control_frequency = 1000
@@ -50,7 +49,6 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         self.set_position_client = None
         self.get_position_client = None
         self.get_velocity_client = None
-        self.set_gains_client = None
         self.set_mode_client = None
         self.set_torque_client = None
         self.set_iq_client = None
@@ -81,8 +79,9 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.node.declare_parameter('remote_teleoperation.socket_timeout', 0.001)
             self.node.declare_parameter('remote_teleoperation.max_communication_errors', 10)
             self.node.declare_parameter('remote_teleoperation.control_frequency', 1000)
-            self.node.declare_parameter('remote_teleoperation.control_gains.kp', [1.75] * 8)
-            self.node.declare_parameter('remote_teleoperation.control_gains.kd', [0.1] * 8)
+            self.node.declare_parameter('remote_teleoperation.control_gains.kp', 1.75)
+            self.node.declare_parameter('remote_teleoperation.control_gains.kd', 0.1)
+            self.node.declare_parameter('remote_teleoperation.control_gains.kt', 0.35)
             
             
             # Cargar valores de parámetros
@@ -93,14 +92,10 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.socket_timeout = self.node.get_parameter('remote_teleoperation.socket_timeout').value
             self.max_communication_errors = self.node.get_parameter('remote_teleoperation.max_communication_errors').value
             self.control_frequency = self.node.get_parameter('remote_teleoperation.control_frequency').value
+            self.kp = self.node.get_parameter('remote_teleoperation.control_gains.kp').value
+            self.kd = self.node.get_parameter('remote_teleoperation.control_gains.kd').value
+            self.kt = self.node.get_parameter('remote_teleoperation.control_gains.kt').value
             
-            # Configurar ganancias de control
-            kp_list = self.node.get_parameter('remote_teleoperation.control_gains.kp').value
-            kd_list = self.node.get_parameter('remote_teleoperation.control_gains.kd').value
-            self.control_gains = {
-                'kp': kp_list,
-                'kd': kd_list
-            }
             
             
             # Configurar IPs y puertos basado en qué máquina somos
@@ -360,11 +355,8 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 if i < len(self.current_velocities):
                     vel_error = self.current_velocities[i]
                 
-                # Calcular corriente objetivo usando ganancias
-                kp = self.control_gains['kp'][i] if i < len(self.control_gains['kp']) else 1.75
-                kd = self.control_gains['kd'][i] if i < len(self.control_gains['kd']) else 0.1
-                
-                iq = (-kp * pos_error - kd * vel_error) / 0.35  # kt fijo
+                # Calcular corriente objetivo usando parámetros
+                iq = (-self.kp * pos_error - self.kd * vel_error) / self.kt
                 currents.append(iq)
             else:
                 currents.append(0.0)

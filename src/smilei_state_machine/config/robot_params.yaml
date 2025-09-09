@@ -14,36 +14,6 @@ smilei_state_machine:
       q_r3: [-2.3562, 1.5708]  # [-135°, 90°]
       q_r4: [-1.5708, 1.5708]  # [-90°, 90°]
 
-    # Ganancias para el modo de control de posición
-    position_control_gains:
-      p_gain_position: 5.0
-      d_gain_position: 0.2
-      i_gain_position: 0.0
-      iq_max: 1.5
-      p_gain_iq: 0.02
-      i_gain_iq: 0.02
-      d_gain_iq: 0.0
-      p_gain_id: 0.02
-      i_gain_id: 0.02
-      d_gain_id: 0.0
-      kt: 0.35
-
-    # Ganancias para el modo de control de corriente
-    current_control_gains:
-      p_gain_position: 0.0
-      d_gain_position: 0.0
-      i_gain_position: 0.0
-      p_gain_force: 0.0
-      d_gain_force: 0.0
-      i_gain_force: 0.0
-      iq_max: 3.0
-      p_gain_iq: 0.277
-      i_gain_iq: 0.061
-      d_gain_iq: 0.0
-      p_gain_id: 0.277
-      i_gain_id: 0.061
-      d_gain_id: 0.0
-      kt: 0.35
 
     # Parámetros físicos del brazo derecho
     right_arm:
@@ -110,10 +80,11 @@ state_machine_node:
       # Configuración de motores
       motor_ids: [1]                  # Lista de IDs de motores a controlar
       
-      # Ganancias de control PD para teleoperación
+      # Ganancias de control PD para teleoperación (valores fijos del behavior)
       control_gains:
-        kp: [1.75, 1.75, 1.75, 1.75, 1.75, 1.75, 1.75, 1.75]  # Ganancia proporcional
-        kd: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]          # Ganancia derivativa
+        kp: 1.75  # Ganancia proporcional fija
+        kd: 0.1   # Ganancia derivativa fija
+        kt: 0.35  # Constante de torque fija
       
       # Configuración de comunicación
       socket_timeout: 0.001
