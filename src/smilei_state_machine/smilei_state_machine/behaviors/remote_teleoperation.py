@@ -172,7 +172,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         self.set_position_client = self.node.create_client(
             SetMotorIdAndTarget, self._get_topic_name('westwood_motor/set_motor_id_and_target'))
         self.get_position_client = self.node.create_client(
-            GetMotorPositions, 'westwood_motor/get_motor_positions')
+            GetMotorPositions, self._get_topic_name('westwood_motor/get_motor_positions'))
         self.set_mode_client = self.node.create_client(
             SetMode, self._get_topic_name('westwood_motor/set_mode'))
         self.set_torque_client = self.node.create_client(
