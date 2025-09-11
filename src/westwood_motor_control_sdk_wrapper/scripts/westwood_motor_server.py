@@ -2,7 +2,7 @@
 
 import rclpy
 from rclpy.node import Node
-from rclpy.executors import SingleThreadedExecutor
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
 from westwood_motor_interfaces.srv import SetMotorIdAndTarget, SetMotorIdAndTargetVelocity, SetMotorIdAndTargetCurrent, GetMotorPositions, GetMotorVelocities, GetAvailableMotors, GetMotorCurrents
 from westwood_motor_interfaces.srv import SetGains, SetMode, SetTorqueEnable, SetGoalIq
@@ -154,6 +154,7 @@ class WestwoodMotorServer(Node):
         # Crear mapeo de motor ID a USB y manager
         self.motor_to_usb_map = {}
         self.usb_to_manager_map = {}
+        self.usb_to_lock_map = {}
         self.detected_motors = set()  # Cache de motores detectados
         
         # Inicializar managers para cada USB con timeout
@@ -182,6 +183,7 @@ class WestwoodMotorServer(Node):
                 
                 self.managers.append(manager)
                 self.usb_to_manager_map[i] = manager
+                self.usb_to_lock_map[i] = threading.Lock()
                 
                 self.get_logger().info(f'✅ Manager de PyBear inicializado correctamente para {port}')
                 self.get_logger().info(f'Puerto: {port}, Baudrate: {self.baudrate}')
@@ -287,16 +289,27 @@ class WestwoodMotorServer(Node):
             if manager is None:
                 continue
             
+            lock = self.usb_to_lock_map.get(usb_index)
+            if not lock:
+                self.get_logger().warning(f"No se encontró lock para USB{usb_index}, saltando detección.")
+                continue
+
             detected_motors = []
-            for motor_id in range(1, self.max_motor_scan_range + 1):  # Buscar IDs configurables
-                try:
-                    result = manager.ping(motor_id)
-                    if result and len(result) > 0:
-                        if result[0] is not None:
-                            detected_motors.append(motor_id)
-                except Exception:
-                    continue
-            
+
+            try:
+                with lock:
+                    for motor_id in range(1, self.max_motor_scan_range + 1):  # Buscar IDs configurables
+                        try:
+                            result = manager.ping(motor_id)
+                            if result and len(result) > 0:
+                                if result[0] is not None:
+                                    detected_motors.append(motor_id)
+                        except Exception:
+                            continue
+            except Exception as e:
+                self.get_logger().error(f"Error durante la detección en USB{usb_index}: {e}")
+                continue
+
             if detected_motors:
                 all_detections[usb_index] = detected_motors
                 self.get_logger().info(f'USB{usb_index}: Detectados {len(detected_motors)} motor(es) con IDs locales: {detected_motors}')
@@ -381,10 +394,15 @@ class WestwoodMotorServer(Node):
             self.get_logger().warning('⚠️ No hay motores configurados manualmente')
     
     def get_manager_for_motor(self, motor_id):
-        """Obtener el manager correcto para un motor ID dado"""
+        """Obtener el manager y el lock correcto para un motor ID dado"""
         if motor_id in self.motor_to_usb_map:
-            return self.motor_to_usb_map[motor_id]['manager'], self.motor_to_usb_map[motor_id]['local_id']
-        return None, motor_id
+            motor_info = self.motor_to_usb_map[motor_id]
+            usb_index = motor_info['usb_index']
+            local_id = motor_info['local_id']
+            manager = motor_info['manager']
+            lock = self.usb_to_lock_map.get(usb_index)
+            return manager, local_id, lock
+        return None, motor_id, None
     
     def ping_motor(self, motor_id):
         """Verificar si un motor está disponible (usando cache)"""
@@ -393,11 +411,12 @@ class WestwoodMotorServer(Node):
             return True
         
         # Si no está en cache, intentar ping real (fallback)
-        manager, local_id = self.get_manager_for_motor(motor_id)
-        if manager is None:
+        manager, local_id, lock = self.get_manager_for_motor(motor_id)
+        if manager is None or lock is None:
             return False
         try:
-            result = manager.ping(local_id)
+            with lock:
+                result = manager.ping(local_id)
             if result and len(result) > 0:
                 if result[0] is not None:
                     # Si el ping es exitoso, agregar al cache
@@ -551,62 +570,58 @@ class WestwoodMotorServer(Node):
                 idx = request.motor_ids.index(motor_id)
                 
                 # Obtener el manager correcto para este motor
-                manager, local_id = self.get_manager_for_motor(motor_id)
+                manager, local_id, lock = self.get_manager_for_motor(motor_id)
                 
-                if manager is None:
-                    self.get_logger().error(f'No se encontró manager para motor {motor_id}')
+                if manager is None or lock is None:
+                    self.get_logger().error(f'No se encontró manager o lock para motor {motor_id}')
                     failed_motor_ids.append(motor_id)
                     previous_positions.append(0.0)
                     continue
                 
                 try:
-                    # Leer posición actual y guardarla
-                    current_position_result = manager.get_present_position(local_id)
-                    if current_position_result and len(current_position_result) > 0:
-                        current_position = float(current_position_result[0][0][0])
-                        target_position = request.target_positions[idx]
-                        
-                        # Mientras idx < len(previous_positions), significa que ya hay posiciones guardadas
-                        while len(previous_positions) <= idx:
-                            previous_positions.append(0.0)
-                        previous_positions[idx] = current_position
-                        
-                        self.get_logger().info(f'🔧 Motor {motor_id}: posición actual {current_position:.3f} → objetivo {target_position:.3f}')
-                        
-                        # Configurar PID para el control de corriente (usando parámetros configurables)
-                        manager.set_p_gain_iq((local_id, self.default_current_gains['p_gain_iq']))
-                        manager.set_i_gain_iq((local_id, self.default_current_gains['i_gain_iq']))
-                        manager.set_d_gain_iq((local_id, self.default_current_gains['d_gain_iq']))
-                        manager.set_p_gain_id((local_id, self.default_current_gains['p_gain_id']))
-                        manager.set_i_gain_id((local_id, self.default_current_gains['i_gain_id']))
-                        manager.set_d_gain_id((local_id, self.default_current_gains['d_gain_id']))
-                        
-                        # PID position mode
-                        manager.set_p_gain_position((local_id, self.default_position_gains['p_gain_position']))
-                        manager.set_i_gain_position((local_id, self.default_position_gains['i_gain_position']))
-                        manager.set_d_gain_position((local_id, self.default_position_gains['d_gain_position']))
-                        
-                        # Log applied gains for debugging
-                        self.get_logger().info(f'🎛️ Ganancias aplicadas a motor {motor_id}:')
-                        self.get_logger().info(f'   Posición PID: P={self.default_position_gains["p_gain_position"]}, I={self.default_position_gains["i_gain_position"]}, D={self.default_position_gains["d_gain_position"]}')
-                        self.get_logger().info(f'   Corriente PID: P={self.default_current_gains["p_gain_iq"]}, I={self.default_current_gains["i_gain_iq"]}, D={self.default_current_gains["d_gain_iq"]}')
-                        self.get_logger().info(f'   Límite corriente: {self.default_position_gains["iq_max"]}A')
-                        
-                        # Configurar modo y límites
-                        manager.set_mode((local_id, 2))  # Modo posición
-                        manager.set_limit_iq_max((local_id, self.default_position_gains['iq_max']))  # Límite de corriente
-                        
-                        # Habilitar torque y mover
-                        manager.set_torque_enable((local_id, 1))
-                        manager.set_goal_position((local_id, target_position))
-                        
-                        successful_motors.append(motor_id)
-                        self.get_logger().info(f'✅ Motor {motor_id} configurado y moviendo')
-                    else:
-                        while len(previous_positions) <= idx:
-                            previous_positions.append(0.0)
-                        failed_motor_ids.append(motor_id)
-                        self.get_logger().warning(f'❌ No se pudo leer la posición actual del motor {motor_id}')
+                    with lock:
+                        # Leer posición actual y guardarla
+                        current_position_result = manager.get_present_position(local_id)
+                        if current_position_result and len(current_position_result) > 0:
+                            current_position = float(current_position_result[0][0][0])
+                            target_position = request.target_positions[idx]
+                            
+                            # Mientras idx < len(previous_positions), significa que ya hay posiciones guardadas
+                            while len(previous_positions) <= idx:
+                                previous_positions.append(0.0)
+                            previous_positions[idx] = current_position
+                            
+                            self.get_logger().info(f'🔧 Motor {motor_id}: posición actual {current_position:.3f} → objetivo {target_position:.3f}')
+                            
+                            # Configurar PID para el control de corriente (usando parámetros configurables)
+                            manager.set_p_gain_iq((local_id, self.default_current_gains['p_gain_iq']))
+                            manager.set_i_gain_iq((local_id, self.default_current_gains['i_gain_iq']))
+                            manager.set_d_gain_iq((local_id, self.default_current_gains['d_gain_iq']))
+                            manager.set_p_gain_id((local_id, self.default_current_gains['p_gain_id']))
+                            manager.set_i_gain_id((local_id, self.default_current_gains['i_gain_id']))
+                            manager.set_d_gain_id((local_id, self.default_current_gains['d_gain_id']))
+
+                            # PID position mode
+                            manager.set_p_gain_position((local_id, self.default_position_gains['p_gain_position']))
+                            manager.set_i_gain_position((local_id, self.default_position_gains['i_gain_position']))
+                            manager.set_d_gain_position((local_id, self.default_position_gains['d_gain_position']))
+
+                            # Configurar modo y límites
+                            manager.set_mode((local_id, 2))  # Modo posición
+                            manager.set_limit_iq_max((local_id, self.default_position_gains['iq_max']))  # Límite de corriente
+                            
+                            # Habilitar torque y mover
+                            manager.set_torque_enable((local_id, 1))
+                            manager.set_goal_position((local_id, target_position))
+                            
+                            successful_motors.append(motor_id)
+                            self.get_logger().info(f'✅ Motor {motor_id} configurado y moviendo')
+                        else:
+                            while len(previous_positions) <= idx:
+                                previous_positions.append(0.0)
+                            failed_motor_ids.append(motor_id)
+                            self.get_logger().warning(f'❌ No se pudo leer la posición actual del motor {motor_id}')
+
                 except Exception as e:
                     self.get_logger().error(f'❌ Error al configurar/mover motor {motor_id}: {str(e)}')
                     failed_motor_ids.append(motor_id)
@@ -704,51 +719,53 @@ class WestwoodMotorServer(Node):
                 idx = request.motor_ids.index(motor_id)
                 
                 # Obtener el manager correcto para este motor
-                manager, local_id = self.get_manager_for_motor(motor_id)
+                manager, local_id, lock = self.get_manager_for_motor(motor_id)
                 
-                if manager is None:
+                if manager is None or lock is None:
                     self.get_logger().error(f'No se encontró para motor {motor_id}')
                     failed_motor_ids.append(motor_id)
                     previous_velocities.append(0.0)
                     continue
 
                 try:
-                    # Leer velocidad actual y guardarla
-                    current_velocity_result = manager.get_present_velocity(local_id)
-                    if current_velocity_result and len(current_velocity_result) > 0:
-                        current_velocity = float(current_velocity_result[0][0][0])
-                        target_velocity = request.target_velocities[idx]
-                        
-                        # Mientras idx < len(previous_velocities), significa que ya hay velocidades guardadas
-                        while len(previous_velocities) <= idx:
-                            previous_velocities.append(0.0)
-                        previous_velocities[idx] = current_velocity
-                        
-                        self.get_logger().info(f'🔧 Motor {motor_id}: velocidad actual {current_velocity:.3f} → objetivo {target_velocity:.3f}')
-                        
-                        # Configurar PID para el control de corriente (usando parámetros configurables)
-                        manager.set_p_gain_iq((local_id, self.default_current_gains['p_gain_iq']))
-                        manager.set_i_gain_iq((local_id, self.default_current_gains['i_gain_iq']))
-                        manager.set_d_gain_iq((local_id, self.default_current_gains['d_gain_iq']))
-                        manager.set_p_gain_id((local_id, self.default_current_gains['p_gain_id']))
-                        manager.set_i_gain_id((local_id, self.default_current_gains['i_gain_id']))
-                        manager.set_d_gain_id((local_id, self.default_current_gains['d_gain_id']))
+                    with lock:
+                        # Leer velocidad actual y guardarla
+                        current_velocity_result = manager.get_present_velocity(local_id)
+                        if current_velocity_result and len(current_velocity_result) > 0:
+                            current_velocity = float(current_velocity_result[0][0][0])
+                            target_velocity = request.target_velocities[idx]
+                            
+                            # Mientras idx < len(previous_velocities), significa que ya hay velocidades guardadas
+                            while len(previous_velocities) <= idx:
+                                previous_velocities.append(0.0)
+                            previous_velocities[idx] = current_velocity
+                            
+                            self.get_logger().info(f'🔧 Motor {motor_id}: velocidad actual {current_velocity:.3f} → objetivo {target_velocity:.3f}')
+                            
+                            # Configurar PID para el control de corriente (usando parámetros configurables)
+                            manager.set_p_gain_iq((local_id, self.default_current_gains['p_gain_iq']))
+                            manager.set_i_gain_iq((local_id, self.default_current_gains['i_gain_iq']))
+                            manager.set_d_gain_iq((local_id, self.default_current_gains['d_gain_iq']))
+                            manager.set_p_gain_id((local_id, self.default_current_gains['p_gain_id']))
+                            manager.set_i_gain_id((local_id, self.default_current_gains['i_gain_id']))
+                            manager.set_d_gain_id((local_id, self.default_current_gains['d_gain_id']))
 
-                        # Configurar modo y límites
-                        manager.set_mode((local_id, 1))  # Modo velocidad
-                        manager.set_limit_iq_max((local_id, self.default_current_gains['iq_max']))  # Límite de corriente
-                        
-                        # Habilitar torque y mover
-                        manager.set_torque_enable((local_id, 1))
-                        manager.set_goal_velocity((local_id, target_velocity))
-                        
-                        successful_motors.append(motor_id)
-                        self.get_logger().info(f'✅ Motor {motor_id} configurado y moviendo')
-                    else:
-                        while len(previous_velocities) <= idx:
-                            previous_velocities.append(0.0)
-                        failed_motor_ids.append(motor_id)
-                        self.get_logger().warning(f'❌ No se pudo leer la velocidad actual del motor {motor_id}')
+                            # Configurar modo y límites
+                            manager.set_mode((local_id, 1))  # Modo velocidad
+                            manager.set_limit_iq_max((local_id, self.default_current_gains['iq_max']))  # Límite de corriente
+
+                            # Habilitar torque y mover
+                            manager.set_torque_enable((local_id, 1))
+                            manager.set_goal_velocity((local_id, target_velocity))
+                            
+                            successful_motors.append(motor_id)
+                            self.get_logger().info(f'✅ Motor {motor_id} configurado y moviendo')
+                        else:
+                            while len(previous_velocities) <= idx:
+                                previous_velocities.append(0.0)
+                            failed_motor_ids.append(motor_id)
+                            self.get_logger().warning(f'❌ No se pudo leer la velocidad actual del motor {motor_id}')
+                            
                 except Exception as e:
                     self.get_logger().error(f'❌ Error al configurar/mover motor {motor_id}: {str(e)}')
                     failed_motor_ids.append(motor_id)
@@ -813,20 +830,21 @@ class WestwoodMotorServer(Node):
             
             # Intentar obtener posiciones reales
             for motor_id in motor_ids:
-                manager, local_id = self.get_manager_for_motor(motor_id)
+                manager, local_id, lock = self.get_manager_for_motor(motor_id)
                 
-                if manager is None:
+                if manager is None or lock is None:
                     failed_motor_ids.append(motor_id)
                     positions.append(0.0)
-                    self.get_logger().warning(f'No se encontró manager para motor {motor_id}')
+                    self.get_logger().warning(f'No se encontró manager o lock para motor {motor_id}')
                     continue
                 
                 try:
                     ping_result = self.ping_motor(motor_id)
                     if ping_result:
                         connected_motors.append(motor_id)
-                        # Obtener posición actual del motor
-                        position_result = manager.get_present_position(local_id)
+                        with lock:
+                            # Obtener posición actual del motor
+                            position_result = manager.get_present_position(local_id)
                         if position_result and len(position_result) > 0:
                             current_position = float(position_result[0][0][0])
                             positions.append(current_position)
@@ -886,20 +904,21 @@ class WestwoodMotorServer(Node):
             
             # Intentar obtener velocidades reales
             for motor_id in motor_ids:
-                manager, local_id = self.get_manager_for_motor(motor_id)
+                manager, local_id, lock = self.get_manager_for_motor(motor_id)
                 
-                if manager is None:
+                if manager is None or lock is None:
                     failed_motor_ids.append(motor_id)
                     velocities.append(0.0)
-                    self.get_logger().warning(f'No se encontró manager para motor {motor_id}')
+                    self.get_logger().warning(f'No se encontró manager o lock para motor {motor_id}')
                     continue
                 
                 try:
                     ping_result = self.ping_motor(motor_id)
                     if ping_result:
                         connected_motors.append(motor_id)
-                        # Obtener velocidad actual del motor
-                        velocity_result = manager.get_present_velocity(local_id)
+                        with lock:
+                            # Obtener velocidad actual del motor
+                            velocity_result = manager.get_present_velocity(local_id)
                         if velocity_result and len(velocity_result) > 0:
                             current_velocity = float(velocity_result[0][0][0])
                             velocities.append(current_velocity)
@@ -1008,20 +1027,21 @@ class WestwoodMotorServer(Node):
             
             # Intentar obtener corrientes reales
             for motor_id in motor_ids:
-                manager, local_id = self.get_manager_for_motor(motor_id)
+                manager, local_id, lock = self.get_manager_for_motor(motor_id)
                 
-                if manager is None:
+                if manager is None or lock is None:
                     failed_motor_ids.append(motor_id)
                     currents.append(0.0)
-                    self.get_logger().warning(f'No se encontró manager para motor {motor_id}')
+                    self.get_logger().warning(f'No se encontró manager o lock para motor {motor_id}')
                     continue
                 
                 try:
                     ping_result = self.ping_motor(motor_id)
                     if ping_result:
                         connected_motors.append(motor_id)
-                        # Obtener corriente actual del motor
-                        current_result = manager.get_present_iq(local_id)
+                        with lock:
+                            # Obtener corriente actual del motor
+                            current_result = manager.get_present_iq(local_id)
                         if current_result and len(current_result) > 0:
                             current_current = float(current_result[0][0][0])
                             currents.append(current_current)
@@ -1081,36 +1101,37 @@ class WestwoodMotorServer(Node):
             
             # Verificar conexión de cada motor y configurar las ganancias
             for motor_id in request.motor_ids:
-                manager, local_id = self.get_manager_for_motor(motor_id)
+                manager, local_id, lock = self.get_manager_for_motor(motor_id)
                 
-                if manager is None:
+                if manager is None or lock is None:
                     failed_motor_ids.append(motor_id)
-                    self.get_logger().warning(f'No se encontró manager para motor {motor_id}')
+                    self.get_logger().warning(f'No se encontró manager o lock para motor {motor_id}')
                     continue
                 
                 try:
                     ping_result = self.ping_motor(motor_id)
                     if ping_result:
-                        connected_motors.append(motor_id)
-                        self.get_logger().info(f'Motor {motor_id} conectado y listo para configuración')
-                        
-                        # Configurar PID para modo posición
-                        manager.set_p_gain_position((local_id, request.p_gain_position))
-                        manager.set_i_gain_position((local_id, request.i_gain_position))
-                        manager.set_d_gain_position((local_id, request.d_gain_position))
-                        
-                        # Configurar PID para modo corriente (iq/id)
-                        manager.set_p_gain_iq((local_id, request.p_gain_iq))
-                        manager.set_i_gain_iq((local_id, request.i_gain_iq))
-                        manager.set_d_gain_iq((local_id, request.d_gain_iq))
-                        manager.set_p_gain_id((local_id, request.p_gain_id))
-                        manager.set_i_gain_id((local_id, request.i_gain_id))
-                        manager.set_d_gain_id((local_id, request.d_gain_id))
-                        
-                        # Establecer límite de corriente
-                        manager.set_limit_iq_max((local_id, request.iq_max))
-                        
-                        self.get_logger().info(f'Ganancias de posición configuradas para motor {motor_id} (local {local_id})')
+                        with lock:
+                            connected_motors.append(motor_id)
+                            self.get_logger().info(f'Motor {motor_id} conectado y listo para configuración')
+                            
+                            # Configurar PID para modo posición
+                            manager.set_p_gain_position((local_id, request.p_gain_position))
+                            manager.set_i_gain_position((local_id, request.i_gain_position))
+                            manager.set_d_gain_position((local_id, request.d_gain_position))
+                            
+                            # Configurar PID para modo corriente (iq/id)
+                            manager.set_p_gain_iq((local_id, request.p_gain_iq))
+                            manager.set_i_gain_iq((local_id, request.i_gain_iq))
+                            manager.set_d_gain_iq((local_id, request.d_gain_iq))
+                            manager.set_p_gain_id((local_id, request.p_gain_id))
+                            manager.set_i_gain_id((local_id, request.i_gain_id))
+                            manager.set_d_gain_id((local_id, request.d_gain_id))
+                            
+                            # Establecer límite de corriente
+                            manager.set_limit_iq_max((local_id, request.iq_max))
+                            
+                            self.get_logger().info(f'Ganancias de posición configuradas para motor {motor_id} (local {local_id})')
                     else:
                         failed_motor_ids.append(motor_id)
                         self.get_logger().warning(f'Motor {motor_id} no responde')
@@ -1153,45 +1174,46 @@ class WestwoodMotorServer(Node):
             
             # Verificar conexión de cada motor y configurar las ganancias
             for motor_id in request.motor_ids:
-                manager, local_id = self.get_manager_for_motor(motor_id)
+                manager, local_id, lock = self.get_manager_for_motor(motor_id)
                 
-                if manager is None:
+                if manager is None or lock is None:
                     failed_motor_ids.append(motor_id)
-                    self.get_logger().warning(f'No se encontró manager para motor {motor_id}')
+                    self.get_logger().warning(f'No se encontró manager o lock para motor {motor_id}')
                     continue
                 
                 try:
                     ping_result = self.ping_motor(motor_id)
                     if ping_result:
-                        connected_motors.append(motor_id)
-                        self.get_logger().info(f'Motor {motor_id} conectado y listo para configuración')
-                        
-                        # Configurar PID para modo posición (a cero en modo corriente)
-                        manager.set_p_gain_position((local_id, 0.0))
-                        manager.set_i_gain_position((local_id, 0.0))
-                        manager.set_d_gain_position((local_id, 0.0))
-                        
-                        # Configurar PID para modo corriente (iq/id)
-                        manager.set_p_gain_iq((local_id, request.p_gain_iq))
-                        manager.set_i_gain_iq((local_id, request.i_gain_iq))
-                        manager.set_d_gain_iq((local_id, request.d_gain_iq))
-                        manager.set_p_gain_id((local_id, request.p_gain_id))
-                        manager.set_i_gain_id((local_id, request.i_gain_id))
-                        manager.set_d_gain_id((local_id, request.d_gain_id))
-                        
-                        # Configurar PID para modo fuerza (si existe)
-                        if hasattr(manager, 'set_p_gain_force'):
-                            manager.set_p_gain_force((local_id, request.p_gain_force))
-                            manager.set_i_gain_force((local_id, request.i_gain_force))
-                            manager.set_d_gain_force((local_id, request.d_gain_force))
-                        
-                        # Establecer límite de corriente
-                        manager.set_limit_iq_max((local_id, request.iq_max))
-                        
-                        # Cambiar a modo corriente (0)
-                        manager.set_mode((local_id, 0))
-                        
-                        self.get_logger().info(f'Ganancias de corriente configuradas para motor {motor_id} (local {local_id})')
+                        with lock:
+                            connected_motors.append(motor_id)
+                            self.get_logger().info(f'Motor {motor_id} conectado y listo para configuración')
+                            
+                            # Configurar PID para modo posición (a cero en modo corriente)
+                            manager.set_p_gain_position((local_id, 0.0))
+                            manager.set_i_gain_position((local_id, 0.0))
+                            manager.set_d_gain_position((local_id, 0.0))
+                            
+                            # Configurar PID para modo corriente (iq/id)
+                            manager.set_p_gain_iq((local_id, request.p_gain_iq))
+                            manager.set_i_gain_iq((local_id, request.i_gain_iq))
+                            manager.set_d_gain_iq((local_id, request.d_gain_iq))
+                            manager.set_p_gain_id((local_id, request.p_gain_id))
+                            manager.set_i_gain_id((local_id, request.i_gain_id))
+                            manager.set_d_gain_id((local_id, request.d_gain_id))
+                            
+                            # Configurar PID para modo fuerza (si existe)
+                            if hasattr(manager, 'set_p_gain_force'):
+                                manager.set_p_gain_force((local_id, request.p_gain_force))
+                                manager.set_i_gain_force((local_id, request.i_gain_force))
+                                manager.set_d_gain_force((local_id, request.d_gain_force))
+                            
+                            # Establecer límite de corriente
+                            manager.set_limit_iq_max((local_id, request.iq_max))
+                            
+                            # Cambiar a modo corriente (0)
+                            manager.set_mode((local_id, 0))
+                            
+                            self.get_logger().info(f'Ganancias de corriente configuradas para motor {motor_id} (local {local_id})')
                     else:
                         failed_motor_ids.append(motor_id)
                         self.get_logger().warning(f'Motor {motor_id} no responde')
@@ -1240,11 +1262,11 @@ class WestwoodMotorServer(Node):
             
             # Configurar el modo para cada motor
             for motor_id in request.motor_ids:
-                manager, local_id = self.get_manager_for_motor(motor_id)
+                manager, local_id, lock = self.get_manager_for_motor(motor_id)
                 
-                if manager is None:
+                if manager is None or lock is None:
                     failed_motor_ids.append(motor_id)
-                    self.get_logger().warning(f'No se encontró manager para motor {motor_id}')
+                    self.get_logger().warning(f'No se encontró manager o lock para motor {motor_id}')
                     continue
                 
                 # Obtener el índice del motor en la lista original
@@ -1253,12 +1275,13 @@ class WestwoodMotorServer(Node):
                 try:
                     ping_result = self.ping_motor(motor_id)
                     if ping_result:
-                        connected_motors.append(motor_id)
-                        self.get_logger().info(f'Motor {motor_id} conectado y listo para configuración')
-                        
-                        # Establecer el modo y las ganancias correspondientes
-                        mode = request.modes[idx]
-                        manager.set_mode((local_id, mode))
+                        with lock:
+                          connected_motors.append(motor_id)
+                          self.get_logger().info(f'Motor {motor_id} conectado y listo para configuración')
+
+                          # Establecer el modo y las ganancias correspondientes
+                          mode = request.modes[idx]
+                          manager.set_mode((local_id, mode))
                         
                         # Configurar ganancias según el modo
                         if mode == 0:  # Modo corriente
@@ -1377,11 +1400,11 @@ class WestwoodMotorServer(Node):
             
             # Configurar el torque para cada motor
             for motor_id in request.motor_ids:
-                manager, local_id = self.get_manager_for_motor(motor_id)
+                manager, local_id, lock = self.get_manager_for_motor(motor_id)
                 
-                if manager is None:
+                if manager is None or lock is None:
                     failed_motor_ids.append(motor_id)
-                    self.get_logger().warning(f'No se encontró manager para motor {motor_id}')
+                    self.get_logger().warning(f'No se encontró manager o lock para motor {motor_id}')
                     continue
                 
                 # Obtener el índice del motor en la lista original
@@ -1390,16 +1413,17 @@ class WestwoodMotorServer(Node):
                 try:
                     ping_result = self.ping_motor(motor_id)
                     if ping_result:
-                        connected_motors.append(motor_id)
-                        self.get_logger().info(f'Motor {motor_id} conectado y listo para configuración')
-                        
-                        # Convertir bool a int (1: habilitado, 0: deshabilitado)
-                        torque_state = 1 if request.enable_torque[idx] else 0
-                        
-                        # Establecer el estado del torque
-                        manager.set_torque_enable((local_id, torque_state))
-                        state_str = "habilitado" if torque_state == 1 else "deshabilitado"
-                        self.get_logger().info(f'Torque {state_str} para motor {motor_id} (local {local_id})')
+                        with lock:
+                            connected_motors.append(motor_id)
+                            self.get_logger().info(f'Motor {motor_id} conectado y listo para configuración')
+                            
+                            # Convertir bool a int (1: habilitado, 0: deshabilitado)
+                            torque_state = 1 if request.enable_torque[idx] else 0
+                            
+                            # Establecer el estado del torque
+                            manager.set_torque_enable((local_id, torque_state))
+                            state_str = "habilitado" if torque_state == 1 else "deshabilitado"
+                            self.get_logger().info(f'Torque {state_str} para motor {motor_id} (local {local_id})')
                     else:
                         failed_motor_ids.append(motor_id)
                         self.get_logger().warning(f'Motor {motor_id} no responde')
@@ -1448,11 +1472,11 @@ class WestwoodMotorServer(Node):
             
             # Establecer corriente para cada motor
             for motor_id in request.motor_ids:
-                manager, local_id = self.get_manager_for_motor(motor_id)
+                manager, local_id, lock = self.get_manager_for_motor(motor_id)
                 
-                if manager is None:
+                if manager is None or lock is None:
                     failed_motor_ids.append(motor_id)
-                    self.get_logger().warning(f'No se encontró manager para motor {motor_id}')
+                    self.get_logger().warning(f'No se encontró manager o lock para motor {motor_id}')
                     continue
                 
                 # Obtener el índice del motor en la lista original
@@ -1461,12 +1485,13 @@ class WestwoodMotorServer(Node):
                 try:
                     ping_result = self.ping_motor(motor_id)
                     if ping_result:
-                        connected_motors.append(motor_id)
-                        self.get_logger().info(f'Motor {motor_id} conectado y listo para control de corriente')
-                        
-                        # Establecer corriente iq objetivo
-                        manager.set_goal_iq((local_id, request.goal_iq[idx]))
-                        self.get_logger().info(f'Corriente iq objetivo {request.goal_iq[idx]} configurada para motor {motor_id} (local {local_id})')
+                        with lock:
+                            connected_motors.append(motor_id)
+                            self.get_logger().info(f'Motor {motor_id} conectado y listo para control de corriente')
+                            
+                            # Establecer corriente iq objetivo
+                            manager.set_goal_iq((local_id, request.goal_iq[idx]))
+                            self.get_logger().info(f'Corriente iq objetivo {request.goal_iq[idx]} configurada para motor {motor_id} (local {local_id})')
                     else:
                         failed_motor_ids.append(motor_id)
                         self.get_logger().warning(f'Motor {motor_id} no responde')
@@ -1526,26 +1551,27 @@ class WestwoodMotorServer(Node):
 
             for motor_id in available_motors:
                 idx = request.motor_ids.index(motor_id)
-                manager, local_id = self.get_manager_for_motor(motor_id)
+                manager, local_id, lock = self.get_manager_for_motor(motor_id)
 
-                if manager is None:
-                    self.get_logger().error(f'No manager found for motor {motor_id}')
+                if manager is None or lock is None:
+                    self.get_logger().error(f'No manager or lock found for motor {motor_id}')
                     failed_motor_ids.append(motor_id)
                     continue
 
                 try:
-                    target_current = request.target_currents[idx]
-                    self.get_logger().info(f'Motor {motor_id}: setting target current {target_current:.3f}')
+                    with lock:
+                        target_current = request.target_currents[idx]
+                        self.get_logger().info(f'Motor {motor_id}: setting target current {target_current:.3f}')
 
-                    # Set to current control mode (mode 0)
-                    manager.set_mode((local_id, 0))
-                    # Enable torque
-                    manager.set_torque_enable((local_id, 1))
-                    # Set goal current
-                    manager.set_goal_iq((local_id, target_current))
+                        # Set to current control mode (mode 0)
+                        manager.set_mode((local_id, 0))
+                        # Enable torque
+                        manager.set_torque_enable((local_id, 1))
+                        # Set goal current
+                        manager.set_goal_iq((local_id, target_current))
 
-                    successful_motors.append(motor_id)
-                    self.get_logger().info(f'Motor {motor_id} configured for current control')
+                        successful_motors.append(motor_id)
+                        self.get_logger().info(f'Motor {motor_id} configured for current control')
 
                 except Exception as e:
                     self.get_logger().error(f'Error configuring/controlling motor {motor_id}: {str(e)}')
@@ -1578,8 +1604,8 @@ def main():
     rclpy.init()
     node = WestwoodMotorServer()
     try:
-        # Use SingleThreadedExecutor for better realtime performance
-        executor = SingleThreadedExecutor()
+        # Use MultiThreadedExecutor for concurrent service calls
+        executor = MultiThreadedExecutor()
         executor.add_node(node)
         executor.spin()
     except KeyboardInterrupt:
@@ -1608,4 +1634,4 @@ def main():
         rclpy.shutdown()
 
 if __name__ == '__main__':
-    main() 
+    main()
