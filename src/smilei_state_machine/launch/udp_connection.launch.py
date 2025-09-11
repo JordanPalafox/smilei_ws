@@ -16,37 +16,20 @@ def generate_launch_description():
     package_dir = get_package_share_directory('smilei_state_machine')
     config_file = os.path.join(package_dir, 'config', 'robot_params.yaml')
     
-    # Argumentos de lanzamiento
-    machine_type_arg = DeclareLaunchArgument(
-        'machine_type',
-        default_value='A',
-        description='Tipo de máquina: A (envía) o B (recibe)'
-    )
-    
-    config_file_arg = DeclareLaunchArgument(
-        'config_file',
-        default_value=config_file,
-        description='Ruta al archivo de configuración YAML'
-    )
+    # Verificar que el archivo existe, si no usar el del directorio src
+    if not os.path.exists(config_file):
+        config_file = '/home/jordan/smilei_ws/src/smilei_state_machine/config/robot_params.yaml'
     
     # Nodo UDP de conexión
     udp_connection_node = Node(
         package='smilei_state_machine',
         executable='udp_connection_node',
-        name='udp_connection_node',
-        parameters=[
-            LaunchConfiguration('config_file'),
-            {
-                # Override is_machine_a based on machine_type argument
-                'remote_teleoperation.is_machine_a': True  # Se puede cambiar en runtime
-            }
-        ],
+        name='state_machine_node',  # Usar el mismo nombre que el namespace del YAML
+        parameters=[config_file],
         output='screen',
         emulate_tty=True,
     )
     
     return LaunchDescription([
-        machine_type_arg,
-        config_file_arg,
         udp_connection_node
     ])

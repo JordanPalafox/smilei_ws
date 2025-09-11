@@ -58,17 +58,17 @@ class UDPConnectionNode(Node):
         self.start_udp_communication()
 
     def load_parameters(self):
-        """Cargar parámetros desde el archivo robot_params.yaml"""
+        """Cargar parámetros desde robot_params.yaml"""
         try:
-            # Declarar parámetros con valores por defecto
-            self.declare_parameter('remote_teleoperation.is_machine_a', True)
+            # Declarar parámetros directamente con el namespace correcto
+            self.declare_parameter('remote_teleoperation.is_machine_a', False)
             self.declare_parameter('remote_teleoperation.machine_a_ip', '192.168.1.50')
-            self.declare_parameter('remote_teleoperation.machine_b_ip', '192.168.1.39')
+            self.declare_parameter('remote_teleoperation.machine_b_ip', '192.168.0.2')
             self.declare_parameter('remote_teleoperation.motor_ids', [1])
             self.declare_parameter('remote_teleoperation.socket_timeout', 0.001)
-            self.declare_parameter('remote_teleoperation.control_frequency', 10000)
+            self.declare_parameter('remote_teleoperation.control_frequency', 1000)
             
-            # Cargar valores
+            # Cargar valores desde el namespace del YAML
             self.is_machine_a = self.get_parameter('remote_teleoperation.is_machine_a').value
             self.machine_a_ip = self.get_parameter('remote_teleoperation.machine_a_ip').value
             self.machine_b_ip = self.get_parameter('remote_teleoperation.machine_b_ip').value
@@ -137,10 +137,15 @@ class UDPConnectionNode(Node):
         if not self.is_machine_a or self.socket is None:
             return
         
+        # Solo enviar si tenemos datos válidos (no todos ceros)
+        with self.data_lock:
+            data_to_send = self.send_data.copy()
+        
+        # Verificar si todos los valores son cero (sin datos válidos)
+        if all(val == 0.0 for val in data_to_send):
+            return  # No enviar si no hay datos válidos
+        
         try:
-            with self.data_lock:
-                data_to_send = self.send_data.copy()
-            
             # Asegurar que tenemos el número correcto de elementos
             if len(data_to_send) != len(self.motor_ids):
                 data_to_send = data_to_send[:len(self.motor_ids)]
@@ -155,17 +160,23 @@ class UDPConnectionNode(Node):
             struct_data = struct.pack(format_str, *data_to_send)
             self.socket.sendto(struct_data, (self.remote_ip, self.send_port))
             
-            # Log periódico (cada 1000 envíos)
+            # Log periódico (cada 100 envíos)
             if not hasattr(self, '_send_count'):
                 self._send_count = 0
             self._send_count += 1
             
-            if self._send_count % 1000 == 0:
+            if self._send_count % 100 == 0:
                 data_str = ", ".join([f"{val:.3f}" for val in data_to_send])
                 self.get_logger().info(f"Enviados #{self._send_count}: [{data_str}]")
                 
         except Exception as e:
-            self.get_logger().warning(f"Error enviando datos UDP: {str(e)}")
+            if not hasattr(self, '_error_count'):
+                self._error_count = 0
+            self._error_count += 1
+            
+            # Solo mostrar errores cada 1000 veces para evitar spam
+            if self._error_count % 1000 == 0:
+                self.get_logger().warning(f"Error enviando datos UDP (#{self._error_count}): {str(e)}")
 
     def receive_data_udp(self):
         """Recibir datos vía UDP (solo máquina B)"""
