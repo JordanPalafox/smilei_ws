@@ -69,11 +69,8 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         self.p1 = (2*self.r2 - self.r1) / self.r1  # ((2r2-r1)/r1)
         self.p2 = (2*self.r2 - self.r1) / self.r1  # ((2r2-r1)/r1)
         
-        # Variables para medición de frecuencia del update
-        self.last_update_time = None
-        self.update_count = 0
-        self.update_frequency_samples = []
-        self.max_frequency_samples = 100  # Mantener últimas 100 muestras
+        # Variables para logging de posición
+        self.send_position_count = 0
 
     def setup(self, timeout_sec=None, **kwargs) -> bool:
         """Configurar el comportamiento"""
@@ -126,8 +123,8 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 self.receive_port = 4000   # Máquina B recibe en puerto 4000
             
             # Inicializar variables de control
-            self.current_positions = [0.0] * len(self.motor_ids)
-            self.current_velocities = [0.0] * len(self.motor_ids)
+            self.current_positions = []  # Se llenarán con datos reales del motor
+            self.current_velocities = []  # Se llenarán con datos reales del motor
             self.target_positions = [0.0] * len(self.motor_ids)
             
             pass
@@ -239,33 +236,44 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
     def get_motor_states(self):
         """Obtiene posiciones y velocidades actuales de todos los motores"""
         try:
-            # Solo lanzar las llamadas sin esperar - procesaremos resultados previos
-            if not hasattr(self, '_pending_pos_future') or self._pending_pos_future.done():
-                req_pos = GetMotorPositions.Request()
-                req_pos.motor_ids = self.motor_ids
-                self._pending_pos_future = self.get_position_client.call_async(req_pos)
+            # Enfoque híbrido: lanzar llamadas y esperar un tiempo mínimo
+            req_pos = GetMotorPositions.Request()
+            req_pos.motor_ids = self.motor_ids
+            future_pos = self.get_position_client.call_async(req_pos)
             
-            if not hasattr(self, '_pending_vel_future') or self._pending_vel_future.done():
-                req_vel = GetMotorVelocities.Request()
-                req_vel.motor_ids = self.motor_ids
-                self._pending_vel_future = self.get_velocity_client.call_async(req_vel)
+            req_vel = GetMotorVelocities.Request()
+            req_vel.motor_ids = self.motor_ids
+            future_vel = self.get_velocity_client.call_async(req_vel)
             
-            # Procesar resultados previos si están listos (sin bloquear)
-            if hasattr(self, '_pending_pos_future') and self._pending_pos_future.done():
+            # Esperar un tiempo mínimo pero no cero
+            rclpy.spin_until_future_complete(self.node, future_pos, timeout_sec=0.002)
+            rclpy.spin_until_future_complete(self.node, future_vel, timeout_sec=0.002)
+            
+            # Procesar resultados si están listos
+            if future_pos.done():
                 try:
-                    result_pos = self._pending_pos_future.result()
-                    if result_pos.success:
+                    result_pos = future_pos.result()
+                    if result_pos and result_pos.success:
+                        old_pos = self.current_positions.copy() if self.current_positions else []
                         self.current_positions = list(result_pos.positions)
-                except:
-                    pass
+                        
+                        # Debug cada 1000 actualizaciones en lugar de cada cambio
+                        if not hasattr(self, '_pos_debug_count'):
+                            self._pos_debug_count = 0
+                        self._pos_debug_count += 1
+                        
+                        if self._pos_debug_count % 1000 == 0:
+                            self.node.get_logger().info(f"Position update #{self._pos_debug_count}: {self.current_positions[0]:.6f}")
+                except Exception as e:
+                    self.node.get_logger().debug(f"Error processing position result: {str(e)}")
             
-            if hasattr(self, '_pending_vel_future') and self._pending_vel_future.done():
+            if future_vel.done():
                 try:
-                    result_vel = self._pending_vel_future.result()
-                    if result_vel.success:
+                    result_vel = future_vel.result()
+                    if result_vel and result_vel.success:
                         self.current_velocities = list(result_vel.velocities)
-                except:
-                    pass
+                except Exception as e:
+                    self.node.get_logger().debug(f"Error processing velocity result: {str(e)}")
             
             return True
         except Exception as e:
@@ -278,17 +286,30 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             return
         
         try:
-            # Usar las posiciones actuales tal como están
+            # Verificar que tenemos posiciones actuales válidas
+            if not self.current_positions or len(self.current_positions) == 0:
+                return
+                
+            # Usar las posiciones actuales del motor (no las target)
             pos_to_send = self.current_positions.copy()
             
             # Crear formato dinámico basado en número de motores
             num_motors = len(self.motor_ids)
             format_str = f'{num_motors}f'
             
+            # Asegurar que tenemos suficientes posiciones
+            while len(pos_to_send) < num_motors:
+                pos_to_send.append(0.0)
+            
             # Empaquetar solo los datos necesarios
             struct_data = struct.pack(format_str, *pos_to_send[:num_motors])
             # Enviar al puerto correcto de la máquina remota
             self.send_socket.sendto(struct_data, (self.remote_ip, self.send_port))
+            
+            # Mostrar posición enviada cada 100 envíos
+            self.send_position_count += 1
+            pos_str = ", ".join([f"{pos:.6f}" for pos in pos_to_send[:num_motors]])
+            self.node.get_logger().info(f"Sending REAL position: [{pos_str}] (current_positions len: {len(self.current_positions)})")
             
         except Exception as e:
             self.node.get_logger().warning(f"Error enviando posiciones: {str(e)}")
@@ -546,30 +567,6 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         
         return TL
 
-    def get_update_frequency_stats(self):
-        """
-        Obtiene estadísticas de frecuencia del update
-        
-        Returns:
-            dict: Estadísticas con avg, min, max, count
-        """
-        if not self.update_frequency_samples:
-            return {
-                'average': 0.0,
-                'minimum': 0.0,
-                'maximum': 0.0,
-                'count': self.update_count,
-                'samples': 0
-            }
-        
-        return {
-            'average': sum(self.update_frequency_samples) / len(self.update_frequency_samples),
-            'minimum': min(self.update_frequency_samples),
-            'maximum': max(self.update_frequency_samples),
-            'count': self.update_count,
-            'samples': len(self.update_frequency_samples)
-        }
-
     def send_current_commands(self, currents):
         """Envía comandos de corriente a los motores"""
         try:
@@ -621,6 +618,26 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             return
         else:
             pass
+        
+        # Obtener posiciones iniciales reales (método síncrono para inicialización)
+        pass
+        try:
+            req_pos = GetMotorPositions.Request()
+            req_pos.motor_ids = self.motor_ids
+            future_pos = self.get_position_client.call_async(req_pos)
+            rclpy.spin_until_future_complete(self.node, future_pos, timeout_sec=2.0)
+            
+            if future_pos.done():
+                result_pos = future_pos.result()
+                if result_pos.success:
+                    self.current_positions = list(result_pos.positions)
+                    self.node.get_logger().info(f"Posiciones iniciales obtenidas: {self.current_positions}")
+                else:
+                    self.node.get_logger().warn("Error obteniendo posiciones iniciales")
+            else:
+                self.node.get_logger().warn("Timeout obteniendo posiciones iniciales")
+        except Exception as e:
+            self.node.get_logger().error(f"Excepción obteniendo posiciones iniciales: {str(e)}")
             
         pass
 
@@ -628,21 +645,6 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         """Bucle principal de teleoperación remota"""
         if not self.running:
             return py_trees.common.Status.SUCCESS
-        
-        # Medir frecuencia del update
-        current_time = time.time()
-        if self.last_update_time is not None:
-            time_diff = current_time - self.last_update_time
-            if time_diff > 0:
-                frequency = 1.0 / time_diff
-                self.update_frequency_samples.append(frequency)
-                
-                # Mantener solo las últimas muestras
-                if len(self.update_frequency_samples) > self.max_frequency_samples:
-                    self.update_frequency_samples.pop(0)
-        
-        self.last_update_time = current_time
-        self.update_count += 1
         
         # Verificar errores de comunicación
         if self.communication_error_count >= self.max_communication_errors:
@@ -691,19 +693,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 else:
                     self.communication_error_count += 1
             
-            # Debug cada 500 iteraciones - incluir estadísticas de frecuencia
-            if hasattr(self, '_debug_counter'):
-                self._debug_counter += 1
-            else:
-                self._debug_counter = 0
-            
-            if self._debug_counter % 2000 == 0:  # Reducido logging para mejor performance
-                freq_stats = self.get_update_frequency_stats()
-                self.node.get_logger().info(
-                    f"Update Frequency Stats: {freq_stats['average']:.1f}Hz avg "
-                    f"(min:{freq_stats['minimum']:.1f}, max:{freq_stats['maximum']:.1f}) "
-                    f"- Total updates: {freq_stats['count']}"
-                )
+            # Sin debug de frecuencia - solo funcionamiento silencioso
             
         except Exception as e:
             self.node.get_logger().error(f"Error en teleoperación remota: {str(e)}")
