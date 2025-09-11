@@ -115,7 +115,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.current_velocities = [0.0] * len(self.motor_ids)
             self.target_positions = [0.0] * len(self.motor_ids)
             
-            self.node.get_logger().info(f"Configuración cargada: Motors={self.motor_ids}, IP={self.local_ip}→{self.remote_ip}")
+            pass
             
         except Exception as e:
             self.node.get_logger().error(f"Error cargando parámetros: {str(e)}")
@@ -147,7 +147,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             (self.set_iq_client, 'set_goal_iq')
         ]:
             if not client.wait_for_service(timeout_sec=timeout_sec):
-                self.node.get_logger().warning(f"Servicio {name} no disponible")
+                pass
                 services_ready = False
         
         return services_ready
@@ -164,8 +164,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.receive_socket.bind((self.local_ip, self.receive_port))
             self.receive_socket.settimeout(self.socket_timeout)
             
-            self.node.get_logger().info(f"UDP configurado: Envío hacia {self.remote_ip}:{self.send_port}, "
-                                      f"Recepción en {self.local_ip}:{self.receive_port}")
+            pass
             return True
         except Exception as e:
             self.node.get_logger().error(f"Error configurando UDP: {str(e)}")
@@ -173,7 +172,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
 
     def zero_position(self):
         """Envía todos los motores a posición cero"""
-        self.node.get_logger().info("Enviando motores a posición cero")
+        pass
         
         req = SetMotorIdAndTarget.Request()
         req.motor_ids = self.motor_ids
@@ -189,18 +188,19 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                     time.sleep(2.0)  # Esperar a que lleguen a posición
                     return True
                 else:
-                    self.node.get_logger().warning(f"Error en zero_position: {result.message}")
+                    pass
             return False
         except Exception as e:
             self.node.get_logger().error(f"Error en zero_position: {str(e)}")
             return False
 
     def setup_current_control(self):
-        """Configura los motores para control de corriente (modo 0)"""
-        self.node.get_logger().info(f"Configurando motores {self.motor_ids} para control de corriente")
+        """Configura los motores para control de corriente usando SetMotorIdAndTargetCurrent"""
+        pass
         
         try:
-            # Configurar modo corriente (modo 0)
+            # Las ganancias PID se configuran automáticamente al usar SetMotorIdAndTargetCurrent
+            # Solo configurar modo corriente (modo 0) y habilitar torque
             req_mode = SetMode.Request()
             req_mode.motor_ids = self.motor_ids
             req_mode.modes = [0] * len(self.motor_ids)  # Modo corriente
@@ -239,7 +239,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                     
                     # Debug si cambió la posición
                     if abs(self.current_positions[0] - old_pos) > 0.01:
-                        self.node.get_logger().info(f"🎯 Motor posición: {self.current_positions[0]:.3f} (cambio: {self.current_positions[0] - old_pos:+.3f})")
+                        pass
             
             # Obtener velocidades
             req_vel = GetMotorVelocities.Request()
@@ -264,26 +264,26 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             return
         
         try:
-            # Ajustar el signo del motor 4 (índice 3) como en el código original
+            # Usar las posiciones actuales tal como están
             pos_to_send = self.current_positions.copy()
-            if len(pos_to_send) > 3:
-                pos_to_send[3] = -1.0 * pos_to_send[3]
             
-            # Empaquetar datos (8 floats)
-            if len(pos_to_send) < 8:
-                pos_to_send.extend([0.0] * (8 - len(pos_to_send)))
+            # Crear formato dinámico basado en número de motores
+            num_motors = len(self.motor_ids)
+            format_str = f'{num_motors}f'
             
-            struct_data = struct.pack('8f', *pos_to_send[:8])
+            # Empaquetar solo los datos necesarios
+            struct_data = struct.pack(format_str, *pos_to_send[:num_motors])
             # Enviar al puerto correcto de la máquina remota
             self.send_socket.sendto(struct_data, (self.remote_ip, self.send_port))
             
-            # Debug cada 100 envíos
+            # Debug cada 10 envíos
             if not hasattr(self, '_send_count'):
                 self._send_count = 0
             self._send_count += 1
             
-            if self._send_count % 10 == 0:  # Más frecuente para debug
-                self.node.get_logger().info(f"📤 Enviando posición {pos_to_send[0]:.3f} a {self.remote_ip}:{self.send_port}")
+            if self._send_count % 1 == 0:
+                pos_str = ", ".join([f"{pos:.3f}" for pos in pos_to_send[:num_motors]])
+                self.node.get_logger().info(f"SEND: [{pos_str}]")
             
         except Exception as e:
             self.node.get_logger().warning(f"Error enviando posiciones: {str(e)}")
@@ -295,18 +295,24 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         
         try:
             data, addr = self.receive_socket.recvfrom(1024)
-            struct_data = struct.unpack('<8f', data)
+            
+            # Crear formato dinámico basado en número de motores
+            num_motors = len(self.motor_ids)
+            format_str = f'<{num_motors}f'
+            
+            struct_data = struct.unpack(format_str, data)
             
             with self.data_lock:
                 self.received_data.append(struct_data)
             
-            # Debug cada 100 recepciones
+            # Debug cada 10 recepciones
             if not hasattr(self, '_receive_count'):
                 self._receive_count = 0
             self._receive_count += 1
             
-            if self._receive_count % 10 == 0:  # Más frecuente para debug
-                self.node.get_logger().info(f"📥 Recibido posición {struct_data[0]:.3f} de {addr}")
+            if self._receive_count % 1 == 0:
+                pos_str = ", ".join([f"{pos:.3f}" for pos in struct_data[:num_motors]])
+                self.node.get_logger().info(f"RECV: [{pos_str}]")
                 
         except socket.timeout:
             pass  # Timeout normal
@@ -314,54 +320,158 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.node.get_logger().warning(f"Error recibiendo posiciones: {str(e)}")
 
     def update_target_positions(self):
-        """Actualiza posiciones objetivo desde datos recibidos con límites de seguridad"""
+        """Actualiza posiciones objetivo desde datos recibidos"""
         with self.data_lock:
             if not self.received_data:
                 return False
             
             # Procesar el último dato recibido
             for entry in self.received_data:
-                # Aplicar límites de seguridad como en el código original
-                limits = [
-                    (-1.58, 1.58),    # Motor 1
-                    (-0.79, 1.58),    # Motor 2
-                    (-3.1416, 1.58),  # Motor 3
-                    (-0.18, 1.16),    # Motor 4
-                    (-1.58, 1.58),    # Motor 5
-                    (-1.58, 0.79),    # Motor 6
-                    (-1.58, 3.1416),  # Motor 7
-                    (-1.16, 0.18)     # Motor 8
-                ]
-                
-                for i, (min_val, max_val) in enumerate(limits[:len(self.motor_ids)]):
-                    if i < len(entry) and min_val <= entry[i] <= max_val:
-                        self.target_positions[i] = entry[i]
+                # Actualizar posiciones objetivo para todos los motores disponibles
+                for i in range(min(len(entry), len(self.motor_ids))):
+                    self.target_positions[i] = entry[i]
             
             # Limpiar datos procesados
             self.received_data.clear()
             return True
 
     def calculate_control_currents(self):
-        """Calcula corrientes de control basado en error de posición y velocidad"""
+        """Calcula corrientes de control basado en error de posición, velocidad y compensación de gravedad"""
         currents = []
         
-        for i in range(len(self.motor_ids)):
-            if i < len(self.current_positions) and i < len(self.target_positions):
-                # Error de posición
-                pos_error = self.current_positions[i] - self.target_positions[i]
-                
-                # Error de velocidad (si está disponible)
-                vel_error = 0.0
-                if i < len(self.current_velocities):
-                    vel_error = self.current_velocities[i]
-                
-                # Calcular corriente objetivo usando parámetros
-                iq = (-self.kp * pos_error - self.kd * vel_error) / self.kt
-                currents.append(iq)
-            else:
-                currents.append(0.0)
+        # Verificar que tenemos al menos 8 motores (4 right + 4 left)
+        if len(self.motor_ids) != 8:
+            # Fallback al control simple para casos con menos motores
+            for i in range(len(self.motor_ids)):
+                if i < len(self.current_positions) and i < len(self.target_positions):
+                    pos_error = self.current_positions[i] - self.target_positions[i]
+                    vel_error = 0.0
+                    if i < len(self.current_velocities):
+                        vel_error = self.current_velocities[i]
+                    iq = (-self.kp * pos_error - self.kd * vel_error) / self.kt
+                    currents.append(iq)
+                else:
+                    currents.append(0.0)
+            return currents
         
-        return currents
+        # Control avanzado para 8 motores con compensación de gravedad
+        try:
+            # Separar posiciones actuales en derecho e izquierdo
+            qr1, qr2, qr3, qr4 = self.current_positions[:4]  # Right arm
+            ql1, ql2, ql3, ql4 = self.current_positions[4:]  # Left arm
+            
+            # Separar velocidades actuales
+            dqr1, dqr2, dqr3, dqr4 = self.current_velocities[:4] if len(self.current_velocities) >= 4 else [0.0, 0.0, 0.0, 0.0]
+            dql1, dql2, dql3, dql4 = self.current_velocities[4:] if len(self.current_velocities) >= 8 else [0.0, 0.0, 0.0, 0.0]
+            
+            # Posiciones objetivo (q_r y q_l del código original)
+            q_r1, q_r2, q_r3, q_r4 = self.target_positions[:4]
+            q_l1, q_l2, q_l3, q_l4 = self.target_positions[4:]
+            
+            # Crear vectores para gravedad (simulando el cálculo original)
+            # Nota: Necesitarás implementar right_gravity_vector y left_gravity_vector
+            # Por ahora uso un placeholder
+            g_qr = [q_l1, q_l2, q_l3, q_l4]  # Del código original: g_qr=q_l[:4]
+            g_ql = [self.target_positions[4], self.target_positions[5], self.target_positions[6], -1.0 * self.target_positions[7]]  # g_ql[3]=-1.0*g_ql[3]
+            
+            # Vectores de gravedad
+            GR = self.right_gravity_vector(g_qr)
+            GL = self.left_gravity_vector(g_ql)
+            
+            # Ganancias (pueden ser arrays para cada articulación)
+            kp = [self.kp] * 4 if not hasattr(self, 'kp_array') else self.kp_array
+            kd = [self.kd] * 4 if not hasattr(self, 'kd_array') else self.kd_array
+            Kt = self.kt
+            
+            # Calcular corrientes objetivo según el código original
+            i_g_1 = ((-kp[0] * (qr1 - q_r1) - kd[0] * dqr1 + GR[0]) / Kt)
+            i_g_2 = ((-kp[1] * (qr2 - q_r2) - kd[1] * dqr2 + GR[1]) / Kt)
+            i_g_3 = ((-kp[2] * (qr3 - q_r3) - kd[2] * dqr3) / Kt)  # Sin compensación de gravedad
+            i_g_4 = ((-kp[3] * (qr4 - q_r4) - kd[3] * dqr4) / Kt)  # Sin compensación de gravedad
+            
+            i_g_5 = ((-kp[0] * (ql1 - q_l1) - kd[0] * dql1 + GL[0]) / Kt)
+            i_g_6 = ((-kp[1] * (ql2 - q_l2) - kd[1] * dql2 + GL[1]) / Kt)
+            i_g_7 = ((-kp[2] * (ql3 - q_l3) - kd[2] * dql3) / Kt)  # Sin compensación de gravedad
+            i_g_8 = ((-kp[3] * (ql4 - q_l4) - kd[3] * dql4) / Kt)  # Sin compensación de gravedad
+            
+            currents = [i_g_1, i_g_2, i_g_3, i_g_4, i_g_5, i_g_6, i_g_7, i_g_8]
+            
+            # Debug logging cada 100 cálculos
+            if not hasattr(self, '_calc_debug_count'):
+                self._calc_debug_count = 0
+            self._calc_debug_count += 1
+            
+            if self._calc_debug_count % 100 == 0:
+                self.node.get_logger().info(f"Corrientes calculadas: R[{i_g_1:.3f}, {i_g_2:.3f}, {i_g_3:.3f}, {i_g_4:.3f}] L[{i_g_5:.3f}, {i_g_6:.3f}, {i_g_7:.3f}, {i_g_8:.3f}]")
+            
+            return currents
+            
+        except Exception as e:
+            self.node.get_logger().error(f"Error calculando corrientes avanzadas: {str(e)}")
+            # Fallback al control simple
+            simple_currents = []
+            for i in range(len(self.motor_ids)):
+                if i < len(self.current_positions) and i < len(self.target_positions):
+                    pos_error = self.current_positions[i] - self.target_positions[i]
+                    vel_error = 0.0
+                    if i < len(self.current_velocities):
+                        vel_error = self.current_velocities[i]
+                    iq = (-self.kp * pos_error - self.kd * vel_error) / self.kt
+                    simple_currents.append(iq)
+                else:
+                    simple_currents.append(0.0)
+            return simple_currents
+
+    def right_gravity_vector(self, q):
+        """Calcula el vector de compensación de gravedad para el brazo derecho"""
+        # Implementación simplificada de compensación de gravedad
+        # Basada en el modelo dinámico del brazo robótico
+        # q = [q1, q2, q3, q4] - ángulos de las articulaciones
+        
+        import math
+        
+        # Parámetros del brazo (valores típicos para un brazo robótico)
+        m1, m2 = 2.0, 1.5  # masas de los eslabones (kg)
+        l1, l2 = 0.3, 0.25  # longitudes de los eslabones (m)
+        lc1, lc2 = 0.15, 0.125  # centros de masa (m)
+        g = 9.81  # gravedad (m/s²)
+        
+        q1, q2, q3, q4 = q
+        
+        # Compensación de gravedad para las primeras dos articulaciones
+        # Solo las primeras dos articulaciones necesitan compensación (como se ve en el código original)
+        tau1 = (m1 * lc1 + m2 * l1) * g * math.cos(q1) + m2 * lc2 * g * math.cos(q1 + q2)
+        tau2 = m2 * lc2 * g * math.cos(q1 + q2)
+        
+        # Las articulaciones 3 y 4 no tienen compensación de gravedad en el código original
+        tau3 = 0.0
+        tau4 = 0.0
+        
+        return [tau1, tau2, tau3, tau4]
+    
+    def left_gravity_vector(self, q):
+        """Calcula el vector de compensación de gravedad para el brazo izquierdo"""
+        # Implementación similar al brazo derecho pero con orientación espejada
+        import math
+        
+        # Parámetros del brazo (iguales al derecho)
+        m1, m2 = 2.0, 1.5  # masas de los eslabones (kg)
+        l1, l2 = 0.3, 0.25  # longitudes de los eslabones (m)
+        lc1, lc2 = 0.15, 0.125  # centros de masa (m)
+        g = 9.81  # gravedad (m/s²)
+        
+        q1, q2, q3, q4 = q
+        
+        # Compensación de gravedad para las primeras dos articulaciones
+        # El brazo izquierdo puede tener orientación espejada
+        tau1 = (m1 * lc1 + m2 * l1) * g * math.cos(q1) + m2 * lc2 * g * math.cos(q1 + q2)
+        tau2 = m2 * lc2 * g * math.cos(q1 + q2)
+        
+        # Las articulaciones 3 y 4 no tienen compensación de gravedad
+        tau3 = 0.0
+        tau4 = 0.0
+        
+        return [tau1, tau2, tau3, tau4]
 
     def send_current_commands(self, currents):
         """Envía comandos de corriente a los motores"""
@@ -375,17 +485,14 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 self._current_send_count = 0
             self._current_send_count += 1
             
-            if self._current_send_count % 10 == 0:  # Más frecuente para debug
-                curr_str = ", ".join([f"I{i}={c:.3f}" for i, c in enumerate(currents)])
-                self.node.get_logger().info(f"⚡ Enviando corrientes: [{curr_str}]")
+            pass
             
             future = self.set_iq_client.call_async(req)
             rclpy.spin_until_future_complete(self.node, future, timeout_sec=0.05)
             
             if future.done():
                 result = future.result()
-                if not result.success and self._current_send_count % 50 == 0:
-                    self.node.get_logger().warning(f"Error en set_goal_iq: {result.message}")
+                pass
                 return result.success
             
             return False
@@ -395,39 +502,37 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
 
     def initialise(self) -> None:
         """Inicializar teleoperación remota"""
-        self.node.get_logger().info(f"🚀 INICIO: Iniciando teleoperación remota para motores {self.motor_ids}")
-        self.node.get_logger().info(f"🌐 Red: {self.remote_ip}:{self.send_port} → {self.local_ip}:{self.receive_port}")
-        self.node.get_logger().info("🎮 Control: [ENTER] para terminar")
+        pass
         
         self.running = True
         
         # Configuración inicial
-        self.node.get_logger().info("📍 Paso 1: Enviando a posición cero...")
+        pass
         if not self.zero_position():
-            self.node.get_logger().warning("⚠️ Error en posición cero, continuando...")
+            pass
         else:
-            self.node.get_logger().info("✅ Posición cero OK")
+            pass
         
-        self.node.get_logger().info("⏳ Esperando 2 segundos...")
+        pass
         time.sleep(2)
         
-        self.node.get_logger().info("🔧 Paso 2: Configurando control de corriente...")
+        pass
         if not self.setup_current_control():
-            self.node.get_logger().error("❌ Error configurando control de corriente")
+            pass
             self.running = False
             return
         else:
-            self.node.get_logger().info("✅ Control de corriente OK")
+            pass
         
-        self.node.get_logger().info("🌐 Paso 3: Configurando comunicación UDP...")
+        pass
         if not self.setup_udp_communication():
-            self.node.get_logger().error("❌ Error configurando comunicación UDP")
+            pass
             self.running = False
             return
         else:
-            self.node.get_logger().info("✅ UDP configurado correctamente")
+            pass
             
-        self.node.get_logger().info("🎯 Inicialización completa, entrando al bucle principal...")
+        pass
 
     def update(self) -> py_trees.common.Status:
         """Bucle principal de teleoperación remota"""
@@ -436,14 +541,14 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         
         # Verificar errores de comunicación
         if self.communication_error_count >= self.max_communication_errors:
-            self.node.get_logger().error(f"Demasiados errores de comunicación. Terminando.")
+            pass
             self.running = False
             return py_trees.common.Status.FAILURE
         
         # Verificar entrada del usuario
         if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
             line = sys.stdin.readline().strip()
-            self.node.get_logger().info("🔄 Terminando teleoperación remota")
+            pass
             self.running = False
             return py_trees.common.Status.SUCCESS
         
@@ -457,7 +562,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                     self._error_counter = 1
                     
                 if self._error_counter % 100 == 0:
-                    self.node.get_logger().warning(f"❌ Error obteniendo estados del motor {self._error_counter} veces")
+                    pass
                 return py_trees.common.Status.RUNNING
             
             # Comunicación UDP en hilos separados
@@ -487,13 +592,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             else:
                 self._debug_counter = 0
             
-            if self._debug_counter % 50 == 0:
-                pos_str = ", ".join([f"M{mid}={pos:.3f}" for mid, pos in 
-                                   zip(self.motor_ids, self.current_positions)])
-                target_str = ", ".join([f"T{i}={t:.3f}" for i, t in 
-                                      enumerate(self.target_positions)])
-                error = self.current_positions[0] - self.target_positions[0] if len(self.current_positions) > 0 and len(self.target_positions) > 0 else 0.0
-                self.node.get_logger().info(f"Pos: [{pos_str}] Target: [{target_str}] Error: {error:.3f}")
+            pass
             
         except Exception as e:
             self.node.get_logger().error(f"Error en teleoperación remota: {str(e)}")
@@ -504,7 +603,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
 
     def restore_position_control(self):
         """Restaura control de posición antes de terminar"""
-        self.node.get_logger().info("Restaurando control de posición")
+        pass
         
         try:
             # Cambiar a modo posición
@@ -530,7 +629,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
 
     def terminate(self, new_status: py_trees.common.Status) -> None:
         """Terminar teleoperación remota"""
-        self.node.get_logger().info(f"Terminando teleoperación remota con estado {new_status}")
+        pass
         self.running = False
         
         # Cerrar sockets UDP

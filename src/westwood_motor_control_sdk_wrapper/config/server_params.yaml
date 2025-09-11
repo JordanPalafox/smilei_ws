@@ -1,0 +1,45 @@
+westwood_motor_server:
+  ros__parameters:
+    # USB port configuration
+    usb_ports: ['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyUSB2', '/dev/ttyUSB3']
+    baudrate: 8000000
+    
+    # Motor detection configuration
+    auto_detect: true
+    debug: false
+    
+    # Manual motor configuration (used when auto_detect is false)
+    motor_ids_usb0: []  # Example: [1, 2, 3]
+    motor_ids_usb1: []  # Example: [4, 5, 6]
+    motor_ids_usb2: []  # Example: [7, 8, 9]
+    motor_ids_usb3: []  # Example: [10, 11, 12]
+    
+    # Real-time configuration
+    realtime_priority: 50
+    nice_value: -10
+    
+    # Motor control default parameters
+    default_position_gains:
+      p_gain_position: 15.0  # Increased for better position tracking
+      i_gain_position: 0.1   # Small integral gain to eliminate steady state error
+      d_gain_position: 0.5   # Increased derivative gain for stability
+      iq_max: 3.0
+    
+    default_current_gains:
+      p_gain_iq: 0.277
+      i_gain_iq: 0.061
+      d_gain_iq: 0.0
+      p_gain_id: 0.277
+      i_gain_id: 0.061
+      d_gain_id: 0.0
+      iq_max: 3.0
+    
+    # Communication settings
+    ping_timeout_ms: 100
+    max_motor_scan_range: 10  # Scan from 1 to this number
+    
+    # Safety limits
+    max_position: 6.28  # 2*pi radians
+    min_position: -6.28 # -2*pi radians
+    max_velocity: 10.0  # rad/s
+    max_current: 3.0    # A
