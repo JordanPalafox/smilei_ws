@@ -74,7 +74,7 @@ state_machine_node:
     remote_teleoperation:
       # Configuración de red
       is_machine_a: true              # true para máquina A, false para máquina B
-      machine_a_ip: '192.168.1.50'   # IP de la máquina A
+      machine_a_ip: '192.168.0.144'   # IP de la máquina A
       machine_b_ip: '192.168.0.2'   # IP de la máquina B
       
       # Configuración de motores
