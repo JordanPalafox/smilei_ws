@@ -60,6 +60,14 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         
         # Variables para manejo de errores
         self.communication_error_count = 0
+        
+        # Parámetros para control de transparencia (TL)
+        self.r1 = 0.5
+        self.r2 = 0.4
+        # Verificar constraint: 2r2 > r1 > r2 > 0
+        assert 2*self.r2 > self.r1 > self.r2 > 0, f"Constraint violated: 2*{self.r2} > {self.r1} > {self.r2} > 0"
+        self.p1 = (2*self.r2 - self.r1) / self.r1  # ((2r2-r1)/r1)
+        self.p2 = (2*self.r2 - self.r1) / self.r1  # ((2r2-r1)/r1)
 
     def setup(self, timeout_sec=None, **kwargs) -> bool:
         """Configurar el comportamiento"""
@@ -86,7 +94,8 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             
             # Cargar valores de parámetros
             self.motor_ids = self.node.get_parameter('remote_teleoperation.motor_ids').value
-            is_machine_a = self.node.get_parameter('remote_teleoperation.is_machine_a').value
+            self.is_machine_a = self.node.get_parameter('remote_teleoperation.is_machine_a').value
+            is_machine_a = self.is_machine_a
             machine_a_ip = self.node.get_parameter('remote_teleoperation.machine_a_ip').value
             machine_b_ip = self.node.get_parameter('remote_teleoperation.machine_b_ip').value
             self.socket_timeout = self.node.get_parameter('remote_teleoperation.socket_timeout').value
@@ -341,14 +350,22 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         
         # Verificar que tenemos al menos 8 motores (4 right + 4 left)
         if len(self.motor_ids) != 8:
-            # Fallback al control simple para casos con menos motores
+            # Fallback al control simple para casos con menos motores con TL
             for i in range(len(self.motor_ids)):
                 if i < len(self.current_positions) and i < len(self.target_positions):
-                    pos_error = self.current_positions[i] - self.target_positions[i]
-                    vel_error = 0.0
-                    if i < len(self.current_velocities):
-                        vel_error = self.current_velocities[i]
-                    iq = (-self.kp * pos_error - self.kd * vel_error) / self.kt
+                    # Obtener velocidad del motor (0.0 si no está disponible)
+                    motor_velocity = self.current_velocities[i] if i < len(self.current_velocities) else 0.0
+                    
+                    # Calcular TL para este motor
+                    TL = self.calculate_transparency_level(
+                        self.current_positions[i], 
+                        self.target_positions[i], 
+                        motor_velocity,
+                        self.is_machine_a
+                    )
+                    
+                    # Aplicar TL dividido entre Kt
+                    iq = TL / self.kt
                     currents.append(iq)
                 else:
                     currents.append(0.0)
@@ -383,16 +400,27 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             kd = [self.kd] * 4 if not hasattr(self, 'kd_array') else self.kd_array
             Kt = self.kt
             
-            # Calcular corrientes objetivo según el código original
-            i_g_1 = ((-kp[0] * (qr1 - q_r1) - kd[0] * dqr1 + GR[0]) / Kt)
-            i_g_2 = ((-kp[1] * (qr2 - q_r2) - kd[1] * dqr2 + GR[1]) / Kt)
-            i_g_3 = ((-kp[2] * (qr3 - q_r3) - kd[2] * dqr3) / Kt)  # Sin compensación de gravedad
-            i_g_4 = ((-kp[3] * (qr4 - q_r4) - kd[3] * dqr4) / Kt)  # Sin compensación de gravedad
+            # Calcular TL para cada motor y aplicarlo junto con compensación de gravedad
+            TL_1 = self.calculate_transparency_level(qr1, q_r1, dqr1, self.is_machine_a)
+            TL_2 = self.calculate_transparency_level(qr2, q_r2, dqr2, self.is_machine_a)
+            TL_3 = self.calculate_transparency_level(qr3, q_r3, dqr3, self.is_machine_a)
+            TL_4 = self.calculate_transparency_level(qr4, q_r4, dqr4, self.is_machine_a)
             
-            i_g_5 = ((-kp[0] * (ql1 - q_l1) - kd[0] * dql1 + GL[0]) / Kt)
-            i_g_6 = ((-kp[1] * (ql2 - q_l2) - kd[1] * dql2 + GL[1]) / Kt)
-            i_g_7 = ((-kp[2] * (ql3 - q_l3) - kd[2] * dql3) / Kt)  # Sin compensación de gravedad
-            i_g_8 = ((-kp[3] * (ql4 - q_l4) - kd[3] * dql4) / Kt)  # Sin compensación de gravedad
+            TL_5 = self.calculate_transparency_level(ql1, q_l1, dql1, self.is_machine_a)
+            TL_6 = self.calculate_transparency_level(ql2, q_l2, dql2, self.is_machine_a)
+            TL_7 = self.calculate_transparency_level(ql3, q_l3, dql3, self.is_machine_a)
+            TL_8 = self.calculate_transparency_level(ql4, q_l4, dql4, self.is_machine_a)
+            
+            # Calcular corrientes combinando TL con compensación de gravedad
+            i_g_1 = (TL_1) / Kt
+            i_g_2 = (TL_2) / Kt
+            i_g_3 = TL_3 / Kt  # Sin compensación de gravedad
+            i_g_4 = TL_4 / Kt  # Sin compensación de gravedad
+            
+            i_g_5 = (TL_5) / Kt
+            i_g_6 = (TL_6) / Kt
+            i_g_7 = TL_7 / Kt  # Sin compensación de gravedad
+            i_g_8 = TL_8 / Kt  # Sin compensación de gravedad
             
             currents = [i_g_1, i_g_2, i_g_3, i_g_4, i_g_5, i_g_6, i_g_7, i_g_8]
             
@@ -408,15 +436,23 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             
         except Exception as e:
             self.node.get_logger().error(f"Error calculando corrientes avanzadas: {str(e)}")
-            # Fallback al control simple
+            # Fallback al control simple con TL
             simple_currents = []
             for i in range(len(self.motor_ids)):
                 if i < len(self.current_positions) and i < len(self.target_positions):
-                    pos_error = self.current_positions[i] - self.target_positions[i]
-                    vel_error = 0.0
-                    if i < len(self.current_velocities):
-                        vel_error = self.current_velocities[i]
-                    iq = (-self.kp * pos_error - self.kd * vel_error) / self.kt
+                    # Obtener velocidad del motor (0.0 si no está disponible)
+                    motor_velocity = self.current_velocities[i] if i < len(self.current_velocities) else 0.0
+                    
+                    # Calcular TL para este motor
+                    TL = self.calculate_transparency_level(
+                        self.current_positions[i], 
+                        self.target_positions[i], 
+                        motor_velocity,
+                        self.is_machine_a
+                    )
+                    
+                    # Aplicar TL dividido entre Kt
+                    iq = TL / self.kt
                     simple_currents.append(iq)
                 else:
                     simple_currents.append(0.0)
@@ -472,6 +508,47 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         tau4 = 0.0
         
         return [tau1, tau2, tau3, tau4]
+
+    def calculate_transparency_level(self, local_motor_position, remote_motor_position, local_motor_velocity, is_machine_a=True):
+        """
+        Calcula el nivel de transparencia (TL) basado en error local y velocidad del motor
+        
+        Args:
+            local_motor_position: Posición del motor local
+            remote_motor_position: Posición del motor remoto  
+            local_motor_velocity: Velocidad del motor local
+            is_machine_a: True si es máquina A, False si es máquina B
+            
+        Returns:
+            TL: Nivel de transparencia calculado
+        """
+        import math
+        
+        # Calcular error local
+        if is_machine_a:
+            # Máquina A: error_local = posición_motor_local - posición_motor_remoto
+            error_local = local_motor_position - remote_motor_position
+        else:
+            # Máquina B: error_local = posición_motor_remoto - posición_motor_local
+            error_local = remote_motor_position - local_motor_position
+        
+        # Calcular TL según la fórmula:
+        # TL = -kp * |error_local|^p1 * sign(error_local) - kd * |motor_velocity|^p2 * sign(motor_velocity)
+        
+        # Primer término: -kp * |error_local|^p1 * sign(error_local)
+        error_magnitude = abs(error_local)
+        error_sign = math.copysign(1, error_local) if error_local != 0 else 0
+        first_term = -self.kp * (error_magnitude ** 0.75) * error_sign
+        
+        # Segundo término: -kd * |motor_velocity|^p2 * sign(motor_velocity)  
+        velocity_magnitude = abs(local_motor_velocity)
+        velocity_sign = math.copysign(1, local_motor_velocity) if local_motor_velocity != 0 else 0
+        second_term = -self.kd * (velocity_magnitude ** 1.0) * velocity_sign
+        
+        # TL total
+        TL = first_term + second_term
+        
+        return TL
 
     def send_current_commands(self, currents):
         """Envía comandos de corriente a los motores"""
