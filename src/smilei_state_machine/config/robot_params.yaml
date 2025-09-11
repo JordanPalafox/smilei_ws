@@ -83,7 +83,7 @@ state_machine_node:
       # Ganancias de control PD para teleoperación (valores fijos del behavior)
       control_gains:
         kp: 0.2  # Ganancia proporcional fija
-        kd: 0.2   # Ganancia derivativa fija
+        kd: 0.01   # Ganancia derivativa fija
         kt: 0.35  # Constante de torque fija
       
       # Config0uración de comunicación

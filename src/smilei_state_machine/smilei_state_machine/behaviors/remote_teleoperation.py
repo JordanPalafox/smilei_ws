@@ -7,6 +7,7 @@ import socket
 import struct
 import threading
 import numpy as np
+from std_msgs.msg import Float64MultiArray
 from westwood_motor_interfaces.srv import (
     SetMotorIdAndTarget, GetMotorPositions, GetMotorVelocities,
     SetMode, SetTorqueEnable, SetGoalIq
@@ -61,6 +62,11 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         # Variables para manejo de errores
         self.communication_error_count = 0
         
+        # Publisher para depuración
+        self.publish_goal_iq = True
+        self.goal_iq_publisher = None
+        self.goal_iq_list = []
+        
         # Parámetros para control de transparencia (TL)
         self.r1 = 0.5
         self.r2 = 0.4
@@ -97,6 +103,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.node.declare_parameter('remote_teleoperation.control_gains.kp', 1.75)
             self.node.declare_parameter('remote_teleoperation.control_gains.kd', 0.1)
             self.node.declare_parameter('remote_teleoperation.control_gains.kt', 0.35)
+            self.node.declare_parameter('remote_teleoperation.publish_goal_iq', True)
             
             
             # Cargar valores de parámetros
@@ -111,6 +118,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.kp = self.node.get_parameter('remote_teleoperation.control_gains.kp').value
             self.kd = self.node.get_parameter('remote_teleoperation.control_gains.kd').value
             self.kt = self.node.get_parameter('remote_teleoperation.control_gains.kt').value
+            self.publish_goal_iq = self.node.get_parameter('remote_teleoperation.publish_goal_iq').value
             
             
             
@@ -130,6 +138,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.current_positions = []  # Se llenarán con datos reales del motor
             self.current_velocities = []  # Se llenarán con datos reales del motor
             self.target_positions = [0.0] * len(self.motor_ids)
+            self.goal_iq_list = [0.0] * len(self.motor_ids)
             
             pass
             
@@ -150,6 +159,10 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             SetTorqueEnable, 'westwood_motor/set_torque_enable')
         self.set_iq_client = self.node.create_client(
             SetGoalIq, 'westwood_motor/set_goal_iq')
+        
+        # Crear publisher si está habilitado
+        if self.publish_goal_iq:
+            self.goal_iq_publisher = self.node.create_publisher(Float64MultiArray, 'debug/goal_iq', 10)
         
         if timeout_sec is None:
             timeout_sec = 1.0
@@ -628,6 +641,15 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             req = SetGoalIq.Request()
             req.motor_ids = self.motor_ids
             req.goal_iq = currents
+            
+            # Actualizar goal_iq_list para debugging
+            self.goal_iq_list = currents
+            
+            # Publicar goal_iq si está habilitado
+            if self.publish_goal_iq and self.goal_iq_publisher:
+                msg = Float64MultiArray()
+                msg.data = [float(iq) for iq in self.goal_iq_list]
+                self.goal_iq_publisher.publish(msg)
             
             # Envío completamente asíncrono - sin esperar resultado
             future = self.set_iq_client.call_async(req)
