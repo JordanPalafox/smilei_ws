@@ -270,8 +270,8 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                             self._pos_debug_count = 0
                         self._pos_debug_count += 1
                         
-                        if self._pos_debug_count % 1000 == 0:
-                            self.node.get_logger().info(f"Position update #{self._pos_debug_count}: {self.current_positions[0]:.6f}")
+                        
+                        self.node.get_logger().info(f"Position update #{self._pos_debug_count}: {self.current_positions[0]:.6f}")
                 except Exception as e:
                     self.node.get_logger().debug(f"Error processing position result: {str(e)}")
             

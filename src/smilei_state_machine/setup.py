@@ -26,6 +26,7 @@ setup(
         'console_scripts': [
             'state_machine = smilei_state_machine.state_machine:main',
             'send_state_command = smilei_state_machine.send_state_command:main',
+            'udp_connection_node = smilei_state_machine.udp_connection_node:main',
         ],
     },
 )
