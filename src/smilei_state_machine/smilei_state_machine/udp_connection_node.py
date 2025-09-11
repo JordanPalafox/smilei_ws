@@ -141,9 +141,10 @@ class UDPConnectionNode(Node):
         with self.data_lock:
             data_to_send = self.send_data.copy()
         
-        # Verificar si todos los valores son cero (sin datos válidos)
-        if all(val == 0.0 for val in data_to_send):
-            return  # No enviar si no hay datos válidos
+        # Solo enviar si hay datos válidos (no todos ceros) o si queremos logs continuos
+        # Para pruebas, comentar esta condición si quieres ver logs con datos cero
+        # if all(val == 0.0 for val in data_to_send):
+        #     return  # No enviar si no hay datos válidos
         
         try:
             # Asegurar que tenemos el número correcto de elementos
@@ -160,14 +161,13 @@ class UDPConnectionNode(Node):
             struct_data = struct.pack(format_str, *data_to_send)
             self.socket.sendto(struct_data, (self.remote_ip, self.send_port))
             
-            # Log periódico (cada 100 envíos)
+            # Log continuo de envíos (máquina A)
             if not hasattr(self, '_send_count'):
                 self._send_count = 0
             self._send_count += 1
             
-            if self._send_count % 100 == 0:
-                data_str = ", ".join([f"{val:.3f}" for val in data_to_send])
-                self.get_logger().info(f"Enviados #{self._send_count}: [{data_str}]")
+            data_str = ", ".join([f"{val:.3f}" for val in data_to_send])
+            self.get_logger().info(f"[MÁQUINA A] Enviando #{self._send_count}: [{data_str}] → {self.remote_ip}:{self.send_port}")
                 
         except Exception as e:
             if not hasattr(self, '_error_count'):
@@ -201,14 +201,13 @@ class UDPConnectionNode(Node):
             msg.data = self.received_data
             self.data_publisher.publish(msg)
             
-            # Log periódico (cada 1000 recepciones)
+            # Log continuo de recepciones (máquina B)
             if not hasattr(self, '_receive_count'):
                 self._receive_count = 0
             self._receive_count += 1
             
-            if self._receive_count % 1000 == 0:
-                data_str = ", ".join([f"{val:.3f}" for val in self.received_data])
-                self.get_logger().info(f"Recibidos #{self._receive_count}: [{data_str}] desde {addr[0]}")
+            data_str = ", ".join([f"{val:.3f}" for val in self.received_data])
+            self.get_logger().info(f"[MÁQUINA B] Recibiendo #{self._receive_count}: [{data_str}] ← {addr[0]}:{addr[1]}")
                 
         except socket.timeout:
             # Timeout normal, no hacer nada
