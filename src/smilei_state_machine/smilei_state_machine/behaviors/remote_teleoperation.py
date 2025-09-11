@@ -196,11 +196,12 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             return False
 
     def setup_current_control(self):
-        """Configura los motores para control de corriente (modo 0)"""
+        """Configura los motores para control de corriente usando SetMotorIdAndTargetCurrent"""
         self.node.get_logger().info(f"Configurando motores {self.motor_ids} para control de corriente")
         
         try:
-            # Configurar modo corriente (modo 0)
+            # Las ganancias PID se configuran automáticamente al usar SetMotorIdAndTargetCurrent
+            # Solo configurar modo corriente (modo 0) y habilitar torque
             req_mode = SetMode.Request()
             req_mode.motor_ids = self.motor_ids
             req_mode.modes = [0] * len(self.motor_ids)  # Modo corriente
@@ -264,26 +265,26 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             return
         
         try:
-            # Ajustar el signo del motor 4 (índice 3) como en el código original
+            # Usar las posiciones actuales tal como están
             pos_to_send = self.current_positions.copy()
-            if len(pos_to_send) > 3:
-                pos_to_send[3] = -1.0 * pos_to_send[3]
             
-            # Empaquetar datos (8 floats)
-            if len(pos_to_send) < 8:
-                pos_to_send.extend([0.0] * (8 - len(pos_to_send)))
+            # Crear formato dinámico basado en número de motores
+            num_motors = len(self.motor_ids)
+            format_str = f'{num_motors}f'
             
-            struct_data = struct.pack('8f', *pos_to_send[:8])
+            # Empaquetar solo los datos necesarios
+            struct_data = struct.pack(format_str, *pos_to_send[:num_motors])
             # Enviar al puerto correcto de la máquina remota
             self.send_socket.sendto(struct_data, (self.remote_ip, self.send_port))
             
-            # Debug cada 100 envíos
+            # Debug cada 10 envíos
             if not hasattr(self, '_send_count'):
                 self._send_count = 0
             self._send_count += 1
             
-            if self._send_count % 10 == 0:  # Más frecuente para debug
-                self.node.get_logger().info(f"📤 Enviando posición {pos_to_send[0]:.3f} a {self.remote_ip}:{self.send_port}")
+            if self._send_count % 10 == 0:
+                pos_str = ", ".join([f"{pos:.3f}" for pos in pos_to_send[:num_motors]])
+                self.node.get_logger().info(f"📤 Enviando [{pos_str}] a {self.remote_ip}:{self.send_port}")
             
         except Exception as e:
             self.node.get_logger().warning(f"Error enviando posiciones: {str(e)}")
@@ -295,18 +296,24 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         
         try:
             data, addr = self.receive_socket.recvfrom(1024)
-            struct_data = struct.unpack('<8f', data)
+            
+            # Crear formato dinámico basado en número de motores
+            num_motors = len(self.motor_ids)
+            format_str = f'<{num_motors}f'
+            
+            struct_data = struct.unpack(format_str, data)
             
             with self.data_lock:
                 self.received_data.append(struct_data)
             
-            # Debug cada 100 recepciones
+            # Debug cada 10 recepciones
             if not hasattr(self, '_receive_count'):
                 self._receive_count = 0
             self._receive_count += 1
             
-            if self._receive_count % 10 == 0:  # Más frecuente para debug
-                self.node.get_logger().info(f"📥 Recibido posición {struct_data[0]:.3f} de {addr}")
+            if self._receive_count % 10 == 0:
+                pos_str = ", ".join([f"{pos:.3f}" for pos in struct_data[:num_motors]])
+                self.node.get_logger().info(f"📥 Recibido [{pos_str}] de {addr}")
                 
         except socket.timeout:
             pass  # Timeout normal
@@ -314,28 +321,16 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.node.get_logger().warning(f"Error recibiendo posiciones: {str(e)}")
 
     def update_target_positions(self):
-        """Actualiza posiciones objetivo desde datos recibidos con límites de seguridad"""
+        """Actualiza posiciones objetivo desde datos recibidos"""
         with self.data_lock:
             if not self.received_data:
                 return False
             
             # Procesar el último dato recibido
             for entry in self.received_data:
-                # Aplicar límites de seguridad como en el código original
-                limits = [
-                    (-1.58, 1.58),    # Motor 1
-                    (-0.79, 1.58),    # Motor 2
-                    (-3.1416, 1.58),  # Motor 3
-                    (-0.18, 1.16),    # Motor 4
-                    (-1.58, 1.58),    # Motor 5
-                    (-1.58, 0.79),    # Motor 6
-                    (-1.58, 3.1416),  # Motor 7
-                    (-1.16, 0.18)     # Motor 8
-                ]
-                
-                for i, (min_val, max_val) in enumerate(limits[:len(self.motor_ids)]):
-                    if i < len(entry) and min_val <= entry[i] <= max_val:
-                        self.target_positions[i] = entry[i]
+                # Actualizar posiciones objetivo para todos los motores disponibles
+                for i in range(min(len(entry), len(self.motor_ids))):
+                    self.target_positions[i] = entry[i]
             
             # Limpiar datos procesados
             self.received_data.clear()

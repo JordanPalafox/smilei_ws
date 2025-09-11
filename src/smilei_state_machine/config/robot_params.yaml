@@ -74,16 +74,16 @@ state_machine_node:
     remote_teleoperation:
       # Configuración de red
       is_machine_a: true              # true para máquina A, false para máquina B
-      machine_a_ip: '192.168.4.241'   # IP de la máquina A
-      machine_b_ip: '192.168.4.238'   # IP de la máquina B
+      machine_a_ip: '192.168.1.183'   # IP de la máquina A
+      machine_b_ip: '192.168.1.39'   # IP de la máquina B
       
       # Configuración de motores
       motor_ids: [1]                  # Lista de IDs de motores a controlar
       
       # Ganancias de control PD para teleoperación (valores fijos del behavior)
       control_gains:
-        kp: 1.75  # Ganancia proporcional fija
-        kd: 0.1   # Ganancia derivativa fija
+        kp: 0.01  # Ganancia proporcional fija
+        kd: 0.01   # Ganancia derivativa fija
         kt: 0.35  # Constante de torque fija
       
       # Configuración de comunicación
