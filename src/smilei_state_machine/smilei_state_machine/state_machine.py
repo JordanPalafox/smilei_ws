@@ -234,6 +234,7 @@ def main():
         while rclpy.ok():
             tree.tick()
             node.get_logger().debug(f"Estado actual: {current_state_command}, Completado: {last_completed_state}")
+            # Sin sleep - máxima frecuencia posible
     except KeyboardInterrupt:
         pass
     finally:
