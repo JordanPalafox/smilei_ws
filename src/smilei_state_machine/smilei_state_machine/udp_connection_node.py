@@ -14,6 +14,7 @@ import time
 import yaml
 import os
 from std_msgs.msg import Float32MultiArray
+from westwood_motor_interfaces.srv import GetMotorPositions, SetMode, SetTorqueEnable
 
 
 class UDPConnectionNode(Node):
@@ -31,6 +32,18 @@ class UDPConnectionNode(Node):
         self.send_data = [0.0] * len(self.motor_ids)
         self.received_data = [0.0] * len(self.motor_ids)
         self.data_lock = threading.Lock()
+        
+        # Clientes de servicio para obtener posiciones y configurar motores
+        self.get_position_client = self.create_client(
+            GetMotorPositions, 'westwood_motor/get_motor_positions')
+        self.set_mode_client = self.create_client(
+            SetMode, 'westwood_motor/set_mode')
+        self.set_torque_client = self.create_client(
+            SetTorqueEnable, 'westwood_motor/set_torque_enable')
+        
+        # Variables para control de lectura de posiciones
+        self.current_positions = [0.0] * len(self.motor_ids)
+        self.positions_lock = threading.Lock()
         
         # Publishers y Subscribers
         if self.is_machine_a:
@@ -51,8 +64,36 @@ class UDPConnectionNode(Node):
             )
             self.get_logger().info("Máquina B configurada - Solo recibirá datos")
         
+        # Configuración inicial de motores para movimiento manual
+        self.get_logger().info("=== INICIANDO CONFIGURACIÓN DE MOTORES ===")
+        
+        # Esperar por los servicios necesarios
+        if not self.wait_for_torque_service():
+            self.get_logger().error("No se pudo conectar al servicio de torque. Abortando inicialización.")
+            return
+            
+        # Deshabilitar torque para permitir movimiento manual
+        if not self.disable_motor_torque():
+            self.get_logger().error("No se pudo deshabilitar torque. Abortando inicialización.")
+            return
+        
+        self.get_logger().info("=== CONFIGURACIÓN DE MOTORES COMPLETADA - LISTOS PARA MOVIMIENTO MANUAL ===")
+        
         # Inicializar conexión UDP
         self.setup_udp_connection()
+        
+        # Esperar por el servicio de posiciones antes de continuar
+        self.wait_for_position_service()
+        
+        # Crear timer para leer posiciones periódicamente
+        # Solo para máquina A que necesita enviar posiciones reales
+        if self.is_machine_a:
+            position_timer_period = 1.0 / self.control_frequency  # Mismo período que UDP
+            self.position_timer = self.create_timer(
+                position_timer_period, 
+                self.read_positions_callback
+            )
+            self.get_logger().info(f"Timer de posiciones creado con período {position_timer_period:.6f}s")
         
         # Iniciar hilo de comunicación UDP
         self.start_udp_communication()
@@ -74,6 +115,9 @@ class UDPConnectionNode(Node):
             self.machine_b_ip = self.get_parameter('remote_teleoperation.machine_b_ip').value
             self.motor_ids = self.get_parameter('remote_teleoperation.motor_ids').value
             self.socket_timeout = self.get_parameter('remote_teleoperation.socket_timeout').value
+            # Aumentar timeout para evitar errores de "timed out" en UDP
+            if self.socket_timeout < 0.01:
+                self.socket_timeout = 0.01  # Mínimo 10ms para operaciones UDP estables
             self.control_frequency = self.get_parameter('remote_teleoperation.control_frequency').value
             
             # Configurar IPs y puertos según el tipo de máquina
@@ -106,6 +150,96 @@ class UDPConnectionNode(Node):
             self.socket_timeout = 0.001
             self.control_frequency = 10000
 
+    def wait_for_position_service(self):
+        """Esperar que el servicio de posiciones esté disponible"""
+        if self.is_machine_a:
+            self.get_logger().info("Esperando servicio de posiciones de motores...")
+            if self.get_position_client.wait_for_service(timeout_sec=10.0):
+                self.get_logger().info("Servicio de posiciones conectado")
+            else:
+                self.get_logger().warning("Servicio de posiciones no disponible, usando valores por defecto")
+
+    def wait_for_torque_service(self):
+        """Esperar que el servicio de torque esté disponible"""
+        self.get_logger().info("Esperando servicio de configuración de torque...")
+        if self.set_torque_client.wait_for_service(timeout_sec=10.0):
+            self.get_logger().info("Servicio de torque conectado")
+            return True
+        else:
+            self.get_logger().error("Servicio de torque no disponible")
+            return False
+
+    def disable_motor_torque(self):
+        """Deshabilitar torque de todos los motores para permitir movimiento manual"""
+        try:
+            self.get_logger().info(f"Deshabilitando torque en motores {self.motor_ids} para movimiento manual...")
+            
+            # Crear request para deshabilitar torque
+            req = SetTorqueEnable.Request()
+            req.motor_ids = self.motor_ids
+            req.enable_torque = [False] * len(self.motor_ids)  # False = torque deshabilitado
+            
+            # Llamar al servicio de forma síncrona
+            future = self.set_torque_client.call_async(req)
+            
+            # Esperar por el resultado con timeout
+            import rclpy
+            rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+            
+            if future.done():
+                result = future.result()
+                if result and result.success:
+                    self.get_logger().info(f"Torque deshabilitado exitosamente - Motores listos para movimiento manual: {result.message}")
+                    return True
+                else:
+                    error_msg = result.message if result else "Sin respuesta del servicio"
+                    self.get_logger().error(f"Error deshabilitando torque: {error_msg}")
+                    return False
+            else:
+                self.get_logger().error("Timeout deshabilitando torque")
+                return False
+                
+        except Exception as e:
+            self.get_logger().error(f"Excepción deshabilitando torque: {str(e)}")
+            return False
+
+    def read_positions_callback(self):
+        """Callback del timer para leer posiciones de los motores"""
+        if not self.is_machine_a:
+            return
+            
+        try:
+            # Crear request para obtener posiciones
+            req = GetMotorPositions.Request()
+            req.motor_ids = self.motor_ids
+            
+            # Llamar al servicio de forma asíncrona
+            future = self.get_position_client.call_async(req)
+            
+            # Usar un callback para procesar el resultado
+            future.add_done_callback(self.position_response_callback)
+            
+        except Exception as e:
+            self.get_logger().debug(f"Error llamando servicio de posiciones: {str(e)}")
+
+    def position_response_callback(self, future):
+        """Callback para procesar la respuesta del servicio de posiciones"""
+        try:
+            result = future.result()
+            if result and result.success:
+                new_positions = list(result.positions)
+                
+                # Actualizar posiciones actuales de forma thread-safe
+                with self.positions_lock:
+                    self.current_positions = new_positions[:len(self.motor_ids)]
+                
+                # Actualizar datos para enviar
+                with self.data_lock:
+                    self.send_data = self.current_positions.copy()
+                    
+        except Exception as e:
+            self.get_logger().debug(f"Error procesando respuesta de posiciones: {str(e)}")
+
     def setup_udp_connection(self):
         """Configurar socket UDP según el tipo de máquina"""
         try:
@@ -137,14 +271,16 @@ class UDPConnectionNode(Node):
         if not self.is_machine_a or self.socket is None:
             return
         
-        # Solo enviar si tenemos datos válidos (no todos ceros)
+        # Obtener posiciones actuales del servicio
         with self.data_lock:
             data_to_send = self.send_data.copy()
         
-        # Solo enviar si hay datos válidos (no todos ceros) o si queremos logs continuos
-        # Para pruebas, comentar esta condición si quieres ver logs con datos cero
-        # if all(val == 0.0 for val in data_to_send):
-        #     return  # No enviar si no hay datos válidos
+        # Log información sobre el origen de los datos
+        with self.positions_lock:
+            current_pos = self.current_positions.copy()
+        
+        # Verificar si tenemos datos reales del servicio
+        has_real_data = any(val != 0.0 for val in current_pos)
         
         try:
             # Asegurar que tenemos el número correcto de elementos
@@ -166,8 +302,11 @@ class UDPConnectionNode(Node):
                 self._send_count = 0
             self._send_count += 1
             
-            data_str = ", ".join([f"{val:.3f}" for val in data_to_send])
-            self.get_logger().info(f"[MÁQUINA A] Enviando #{self._send_count}: [{data_str}] → {self.remote_ip}:{self.send_port}")
+            # Reducir frecuencia de logging para mejorar performance
+            if self._send_count % 100 == 0:  # Log cada 100 envíos en lugar de cada uno
+                data_str = ", ".join([f"{val:.6f}" for val in data_to_send])
+                data_source = "REAL" if has_real_data else "DEFAULT"
+                self.get_logger().info(f"[MÁQUINA A] Enviando #{self._send_count} ({data_source}): [{data_str}] → {self.remote_ip}:{self.send_port}")
                 
         except Exception as e:
             if not hasattr(self, '_error_count'):
@@ -177,6 +316,8 @@ class UDPConnectionNode(Node):
             # Solo mostrar errores cada 1000 veces para evitar spam
             if self._error_count % 1000 == 0:
                 self.get_logger().warning(f"Error enviando datos UDP (#{self._error_count}): {str(e)}")
+                # Información adicional de diagnóstico cada 1000 errores
+                self.get_logger().info(f"Diagnóstico UDP: Enviando a {self.remote_ip}:{self.send_port}, timeout={self.socket_timeout}s")
 
     def receive_data_udp(self):
         """Recibir datos vía UDP (solo máquina B)"""
@@ -201,13 +342,16 @@ class UDPConnectionNode(Node):
             msg.data = self.received_data
             self.data_publisher.publish(msg)
             
-            # Log continuo de recepciones (máquina B)
+            # Log reducido de recepciones (máquina B)
             if not hasattr(self, '_receive_count'):
                 self._receive_count = 0
             self._receive_count += 1
             
-            data_str = ", ".join([f"{val:.3f}" for val in self.received_data])
-            self.get_logger().info(f"[MÁQUINA B] Recibiendo #{self._receive_count}: [{data_str}] ← {addr[0]}:{addr[1]}")
+            # Reducir frecuencia de logging para mejorar performance
+            if self._receive_count % 100 == 0:  # Log cada 100 recepciones en lugar de cada una
+                data_str = ", ".join([f"{val:.6f}" for val in self.received_data])
+                data_type = "REAL" if any(val != 0.0 for val in self.received_data) else "ZEROS"
+                self.get_logger().info(f"[MÁQUINA B] Recibiendo #{self._receive_count} ({data_type}): [{data_str}] ← {addr[0]}:{addr[1]}")
                 
         except socket.timeout:
             # Timeout normal, no hacer nada

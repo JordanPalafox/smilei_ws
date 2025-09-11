@@ -11,6 +11,12 @@ import os
 import sched
 import threading
 import time
+import errno
+from contextlib import contextmanager
+import signal
+import functools
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+import queue
 
 # Verificar si el módulo está disponible en el sistema
 try:
@@ -32,6 +38,40 @@ except ImportError:
 else:
     # Si está disponible, importa los componentes
     from westwood_motor_control_sdk_wrapper import Manager
+
+def timeout_handler(signum, frame):
+    """Signal handler for timeout"""
+    raise TimeoutError("Operation timed out")
+
+def safe_motor_operation(operation_func, timeout=0.1):
+    """Execute motor operation with timeout protection for real-time systems"""
+    result_queue = queue.Queue()
+    exception_queue = queue.Queue()
+    
+    def worker():
+        try:
+            result = operation_func()
+            result_queue.put(result)
+        except Exception as e:
+            exception_queue.put(e)
+    
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    thread.join(timeout)
+    
+    if thread.is_alive():
+        # Operation timed out - this prevents hanging
+        raise TimeoutError(f"Motor operation timed out after {timeout}s")
+    
+    # Check for exceptions
+    if not exception_queue.empty():
+        raise exception_queue.get()
+    
+    # Return result if available
+    if not result_queue.empty():
+        return result_queue.get()
+    
+    return None
 
 class WestwoodMotorServer(Node):
     def __init__(self):
@@ -77,6 +117,8 @@ class WestwoodMotorServer(Node):
         # Communication settings
         self.declare_parameter('ping_timeout_ms', 100)
         self.declare_parameter('max_motor_scan_range', 10)
+        self.declare_parameter('communication_timeout_s', 2.0)  # Timeout for individual operations
+        self.declare_parameter('max_retry_attempts', 2)  # Number of retries before giving up
         
         # Safety limits
         self.declare_parameter('max_position', 6.28)
@@ -132,6 +174,8 @@ class WestwoodMotorServer(Node):
         # Communication settings
         self.ping_timeout_ms = self.get_parameter('ping_timeout_ms').value
         self.max_motor_scan_range = self.get_parameter('max_motor_scan_range').value
+        self.communication_timeout = self.get_parameter('communication_timeout_s').value
+        self.max_retry_attempts = self.get_parameter('max_retry_attempts').value
         
         # Safety limits
         self.max_position = self.get_parameter('max_position').value
@@ -156,6 +200,19 @@ class WestwoodMotorServer(Node):
         self.usb_to_manager_map = {}
         self.usb_to_lock_map = {}
         self.detected_motors = set()  # Cache de motores detectados
+        
+        # Connection monitoring and recovery
+        self.connection_states = {}  # {usb_index: {'healthy': bool, 'last_error': time, 'error_count': int}}
+        self.max_consecutive_errors = 3
+        self.error_cooldown_time = 5.0  # seconds
+        self.connection_check_timer = None
+        
+        # Real-time communication settings
+        self.fast_fail_threshold = 3  # Quick fail after this many consecutive errors
+        self.fast_recovery_time = 1.0  # Quick recovery attempt after 1 second
+        
+        # Lightweight connection health tracking (atomic operations)
+        self.connection_health = {}  # {usb_index: bool} - simple healthy/unhealthy
         
         # Inicializar managers para cada USB con timeout
         self.managers = []
@@ -184,6 +241,17 @@ class WestwoodMotorServer(Node):
                 self.managers.append(manager)
                 self.usb_to_manager_map[i] = manager
                 self.usb_to_lock_map[i] = threading.Lock()
+                
+                # Initialize connection state tracking
+                self.connection_states[i] = {
+                    'healthy': True,
+                    'last_error': 0,
+                    'error_count': 0,
+                    'port': port
+                }
+                
+                # Initialize simple health tracking for real-time
+                self.connection_health[i] = True
                 
                 self.get_logger().info(f'✅ Manager de PyBear inicializado correctamente para {port}')
                 self.get_logger().info(f'Puerto: {port}, Baudrate: {self.baudrate}')
@@ -244,6 +312,9 @@ class WestwoodMotorServer(Node):
             self.get_logger().error(f'❌ Error al configurar servicios: {str(e)}')
             import traceback
             self.get_logger().error(traceback.format_exc())
+        
+        # Start connection monitoring timer
+        self.start_connection_monitoring()
     
     def setup_realtime_scheduling(self):
         """Configure realtime scheduling for the server process"""
@@ -405,30 +476,230 @@ class WestwoodMotorServer(Node):
         return None, motor_id, None
     
     def ping_motor(self, motor_id):
-        """Verificar si un motor está disponible (usando cache)"""
-        # Primero verificar el cache de motores detectados
+        """Fast motor availability check optimized for real-time"""
+        # For real-time operation, rely primarily on cache and connection health
         if motor_id in self.detected_motors:
-            return True
+            motor_info = self.motor_to_usb_map.get(motor_id)
+            if motor_info and self.connection_health.get(motor_info['usb_index'], False):
+                return True
         
-        # Si no está en cache, intentar ping real (fallback)
+        # If not cached or connection unhealthy, try direct ping
+        return self._ping_motor_direct(motor_id)
+    
+    def _ping_motor_direct(self, motor_id):
+        """Direct ping to motor with safe communication"""
         manager, local_id, lock = self.get_manager_for_motor(motor_id)
         if manager is None or lock is None:
             return False
+        
         try:
-            with lock:
-                result = manager.ping(local_id)
-            if result and len(result) > 0:
-                if result[0] is not None:
-                    # Si el ping es exitoso, agregar al cache
-                    self.detected_motors.add(motor_id)
-                    return True
+            # Get USB index for this motor
+            motor_info = self.motor_to_usb_map.get(motor_id)
+            if not motor_info:
+                return False
+            
+            usb_index = motor_info['usb_index']
+            
+            with self.safe_communication(usb_index, motor_id, "ping"):
+                with lock:
+                    result = safe_motor_operation(
+                        lambda: manager.ping(local_id),
+                        timeout=0.05  # 50ms timeout for ping
+                    )
+                if result and len(result) > 0:
+                    if result[0] is not None:
+                        # Si el ping es exitoso, agregar al cache
+                        self.detected_motors.add(motor_id)
+                        return True
             return False
-        except Exception:
+        except Exception as e:
+            # Remove from cache if ping fails
+            self.detected_motors.discard(motor_id)
             return False
     
     def get_all_motor_ids(self):
         """Obtener todos los IDs de motores configurados"""
         return list(self.motor_to_usb_map.keys())
+    
+    @contextmanager
+    def safe_communication(self, usb_index, motor_id, operation_name="operation"):
+        """Lightweight context manager for real-time communication with minimal overhead"""
+        try:
+            # Quick health check - fail fast if connection is known bad
+            if not self.connection_health.get(usb_index, False):
+                raise RuntimeError(f"USB{usb_index} connection unhealthy")
+            
+            yield
+            # Success - ensure connection is marked healthy
+            self.connection_health[usb_index] = True
+            if usb_index in self.connection_states:
+                self.connection_states[usb_index]['error_count'] = 0
+            
+        except Exception as e:
+            # Fast error handling for real-time
+            error_str = str(e).lower()
+            is_critical = any(pattern in error_str for pattern in [
+                'bad file descriptor', 'errno 9', 'device disconnected', 'no such device'
+            ])
+            
+            if is_critical:
+                # Mark connection as unhealthy immediately
+                self.connection_health[usb_index] = False
+                self.get_logger().error(f"❌ USB{usb_index} marked unhealthy: {operation_name} on motor {motor_id}: {str(e)}")
+                
+                # Quick recovery attempt in background (non-blocking)
+                if hasattr(self, '_last_recovery_attempt'):
+                    if time.time() - self._last_recovery_attempt.get(usb_index, 0) > self.fast_recovery_time:
+                        self._last_recovery_attempt[usb_index] = time.time()
+                        # Schedule recovery attempt (don't block current operation)
+                        threading.Thread(target=self._background_recovery, args=(usb_index,), daemon=True).start()
+                else:
+                    self._last_recovery_attempt = {usb_index: time.time()}
+            
+            # Update error count for less critical errors
+            if usb_index in self.connection_states:
+                self.connection_states[usb_index]['error_count'] += 1
+                if self.connection_states[usb_index]['error_count'] >= self.fast_fail_threshold:
+                    self.connection_health[usb_index] = False
+            
+            raise e
+    
+    def _background_recovery(self, usb_index):
+        """Background recovery method that doesn't block real-time operations"""
+        try:
+            if self.attempt_connection_recovery(usb_index):
+                self.connection_health[usb_index] = True
+                self.get_logger().info(f"✅ Background recovery successful for USB{usb_index}")
+        except Exception as e:
+            self.get_logger().warning(f"⚠️ Background recovery failed for USB{usb_index}: {str(e)}")
+    
+    def is_connection_healthy(self, usb_index):
+        """Fast connection health check for real-time operation"""
+        return self.connection_health.get(usb_index, False)
+    
+    def mark_connection_success(self, usb_index):
+        """Mark a successful communication, resetting error counters"""
+        if usb_index in self.connection_states:
+            self.connection_states[usb_index]['error_count'] = 0
+            self.connection_states[usb_index]['healthy'] = True
+    
+    def handle_communication_error(self, usb_index, motor_id, error, operation_name):
+        """Handle communication errors with appropriate recovery strategies"""
+        current_time = time.time()
+        
+        # Update connection state
+        if usb_index in self.connection_states:
+            state = self.connection_states[usb_index]
+            state['error_count'] += 1
+            state['last_error'] = current_time
+            
+            # Check if this is a critical error
+            is_critical = self.is_critical_error(error)
+            
+            if is_critical or state['error_count'] >= self.max_consecutive_errors:
+                state['healthy'] = False
+                self.get_logger().error(
+                    f"❌ USB{usb_index} marked unhealthy after {state['error_count']} errors. "
+                    f"Last error during {operation_name} on motor {motor_id}: {str(error)}"
+                )
+                
+                # Attempt immediate recovery for critical errors
+                if is_critical:
+                    self.get_logger().warning(f"🔧 Attempting immediate recovery for critical error on USB{usb_index}")
+                    return self.attempt_connection_recovery(usb_index)
+            else:
+                self.get_logger().warning(
+                    f"⚠️ Communication error on USB{usb_index} motor {motor_id} during {operation_name}: {str(error)} "
+                    f"(error {state['error_count']}/{self.max_consecutive_errors})"
+                )
+        
+        return False  # Error not handled, let it propagate
+    
+    def is_critical_error(self, error):
+        """Determine if an error is critical and requires immediate recovery"""
+        error_str = str(error).lower()
+        critical_patterns = [
+            'bad file descriptor',
+            'errno 9',
+            'device disconnected',
+            'no such device',
+            'broken pipe',
+            'connection reset'
+        ]
+        return any(pattern in error_str for pattern in critical_patterns)
+    
+    def attempt_connection_recovery(self, usb_index):
+        """Attempt to recover a failed USB connection"""
+        if usb_index not in self.connection_states:
+            return False
+        
+        state = self.connection_states[usb_index]
+        port = state['port']
+        
+        self.get_logger().info(f"🔧 Attempting recovery for USB{usb_index} ({port})")
+        
+        try:
+            # Close existing manager if it exists
+            if usb_index < len(self.managers) and self.managers[usb_index] is not None:
+                try:
+                    self.managers[usb_index].close()
+                except:
+                    pass  # Ignore errors during cleanup
+            
+            # Wait briefly before reconnection
+            time.sleep(0.5)
+            
+            # Check if port still exists
+            if not os.path.exists(port):
+                self.get_logger().error(f"❌ Recovery failed: Port {port} no longer exists")
+                return False
+            
+            # Create new manager
+            new_manager = Manager(
+                port=port,
+                baudrate=self.baudrate,
+                debug=self.debug
+            )
+            
+            # Test communication
+            test_ping = new_manager.ping(1)
+            
+            # Update manager references
+            self.managers[usb_index] = new_manager
+            self.usb_to_manager_map[usb_index] = new_manager
+            
+            # Reset connection state
+            state['healthy'] = True
+            state['error_count'] = 0
+            state['last_error'] = 0
+            
+            self.get_logger().info(f"✅ Successfully recovered USB{usb_index} connection")
+            return True
+            
+        except Exception as e:
+            self.get_logger().error(f"❌ Recovery failed for USB{usb_index}: {str(e)}")
+            return False
+    
+    def start_connection_monitoring(self):
+        """Start lightweight connection health monitoring for real-time"""
+        self.connection_check_timer = self.create_timer(
+            5.0,  # More frequent checks for real-time
+            self.check_connection_health
+        )
+        self.get_logger().info("🔍 Real-time connection monitoring started")
+    
+    def check_connection_health(self):
+        """Lightweight periodic health check for real-time operation"""
+        for usb_index in self.connection_health:
+            if not self.connection_health[usb_index]:
+                # Check if enough time has passed to attempt recovery
+                current_time = time.time()
+                if hasattr(self, '_last_recovery_attempt'):
+                    last_attempt = self._last_recovery_attempt.get(usb_index, 0)
+                    if current_time - last_attempt > self.fast_recovery_time * 2:  # Try recovery less frequently
+                        self._last_recovery_attempt[usb_index] = current_time
+                        # Background recovery attempt
+                        threading.Thread(target=self._background_recovery, args=(usb_index,), daemon=True).start()
     
     def setup_services(self):
         """Configurar todos los servicios ROS2"""
@@ -579,48 +850,61 @@ class WestwoodMotorServer(Node):
                     continue
                 
                 try:
-                    with lock:
-                        # Leer posición actual y guardarla
-                        current_position_result = manager.get_present_position(local_id)
-                        if current_position_result and len(current_position_result) > 0:
-                            current_position = float(current_position_result[0][0][0])
-                            target_position = request.target_positions[idx]
-                            
-                            # Mientras idx < len(previous_positions), significa que ya hay posiciones guardadas
-                            while len(previous_positions) <= idx:
-                                previous_positions.append(0.0)
-                            previous_positions[idx] = current_position
-                            
-                            self.get_logger().info(f'🔧 Motor {motor_id}: posición actual {current_position:.3f} → objetivo {target_position:.3f}')
-                            
-                            # Configurar PID para el control de corriente (usando parámetros configurables)
-                            manager.set_p_gain_iq((local_id, self.default_current_gains['p_gain_iq']))
-                            manager.set_i_gain_iq((local_id, self.default_current_gains['i_gain_iq']))
-                            manager.set_d_gain_iq((local_id, self.default_current_gains['d_gain_iq']))
-                            manager.set_p_gain_id((local_id, self.default_current_gains['p_gain_id']))
-                            manager.set_i_gain_id((local_id, self.default_current_gains['i_gain_id']))
-                            manager.set_d_gain_id((local_id, self.default_current_gains['d_gain_id']))
+                    # Get USB index for this motor
+                    motor_info = self.motor_to_usb_map[motor_id]
+                    usb_index = motor_info['usb_index']
+                    
+                    with self.safe_communication(usb_index, motor_id, "position_control"):
+                        with lock:
+                            # Leer posición actual con timeout protection
+                            current_position_result = safe_motor_operation(
+                                lambda: manager.get_present_position(local_id),
+                                timeout=0.05  # 50ms timeout for real-time
+                            )
+                            if current_position_result and len(current_position_result) > 0:
+                                current_position = float(current_position_result[0][0][0])
+                                target_position = request.target_positions[idx]
+                                
+                                # Mientras idx < len(previous_positions), significa que ya hay posiciones guardadas
+                                while len(previous_positions) <= idx:
+                                    previous_positions.append(0.0)
+                                previous_positions[idx] = current_position
+                                
+                                self.get_logger().info(f'🔧 Motor {motor_id}: posición actual {current_position:.3f} → objetivo {target_position:.3f}')
+                                
+                                # Configuración rápida con timeout protection
+                                def configure_motor():
+                                    # Configurar PID para el control de corriente
+                                    manager.set_p_gain_iq((local_id, self.default_current_gains['p_gain_iq']))
+                                    manager.set_i_gain_iq((local_id, self.default_current_gains['i_gain_iq']))
+                                    manager.set_d_gain_iq((local_id, self.default_current_gains['d_gain_iq']))
+                                    manager.set_p_gain_id((local_id, self.default_current_gains['p_gain_id']))
+                                    manager.set_i_gain_id((local_id, self.default_current_gains['i_gain_id']))
+                                    manager.set_d_gain_id((local_id, self.default_current_gains['d_gain_id']))
 
-                            # PID position mode
-                            manager.set_p_gain_position((local_id, self.default_position_gains['p_gain_position']))
-                            manager.set_i_gain_position((local_id, self.default_position_gains['i_gain_position']))
-                            manager.set_d_gain_position((local_id, self.default_position_gains['d_gain_position']))
+                                    # PID position mode
+                                    manager.set_p_gain_position((local_id, self.default_position_gains['p_gain_position']))
+                                    manager.set_i_gain_position((local_id, self.default_position_gains['i_gain_position']))
+                                    manager.set_d_gain_position((local_id, self.default_position_gains['d_gain_position']))
 
-                            # Configurar modo y límites
-                            manager.set_mode((local_id, 2))  # Modo posición
-                            manager.set_limit_iq_max((local_id, self.default_position_gains['iq_max']))  # Límite de corriente
-                            
-                            # Habilitar torque y mover
-                            manager.set_torque_enable((local_id, 1))
-                            manager.set_goal_position((local_id, target_position))
-                            
-                            successful_motors.append(motor_id)
-                            self.get_logger().info(f'✅ Motor {motor_id} configurado y moviendo')
-                        else:
-                            while len(previous_positions) <= idx:
-                                previous_positions.append(0.0)
-                            failed_motor_ids.append(motor_id)
-                            self.get_logger().warning(f'❌ No se pudo leer la posición actual del motor {motor_id}')
+                                    # Configurar modo y límites
+                                    manager.set_mode((local_id, 2))  # Modo posición
+                                    manager.set_limit_iq_max((local_id, self.default_position_gains['iq_max']))
+                                    
+                                    # Habilitar torque y mover
+                                    manager.set_torque_enable((local_id, 1))
+                                    manager.set_goal_position((local_id, target_position))
+                                
+                                # Execute configuration with timeout
+                                safe_motor_operation(configure_motor, timeout=0.1)
+                                
+                                successful_motors.append(motor_id)
+                                self.get_logger().info(f'✅ Motor {motor_id} configurado y moviendo')
+                            else:
+                                while len(previous_positions) <= idx:
+                                    previous_positions.append(0.0)
+                                failed_motor_ids.append(motor_id)
+                                self.get_logger().warning(f'❌ No se pudo leer la posición actual del motor {motor_id}')
 
                 except Exception as e:
                     self.get_logger().error(f'❌ Error al configurar/mover motor {motor_id}: {str(e)}')
@@ -842,17 +1126,26 @@ class WestwoodMotorServer(Node):
                     ping_result = self.ping_motor(motor_id)
                     if ping_result:
                         connected_motors.append(motor_id)
-                        with lock:
-                            # Obtener posición actual del motor
-                            position_result = manager.get_present_position(local_id)
-                        if position_result and len(position_result) > 0:
-                            current_position = float(position_result[0][0][0])
-                            positions.append(current_position)
-                            self.get_logger().info(f'Motor {motor_id} (local {local_id}): posición actual {current_position}')
-                        else:
-                            positions.append(0.0)  # Valor por defecto si no se pudo leer
-                            failed_motor_ids.append(motor_id)
-                            self.get_logger().warning(f'No se pudo leer la posición del motor {motor_id}')
+                        
+                        # Get USB index for this motor
+                        motor_info = self.motor_to_usb_map[motor_id]
+                        usb_index = motor_info['usb_index']
+                        
+                        with self.safe_communication(usb_index, motor_id, "position_read"):
+                            with lock:
+                                # Obtener posición actual con timeout
+                                position_result = safe_motor_operation(
+                                    lambda: manager.get_present_position(local_id),
+                                    timeout=0.02  # 20ms timeout for position reading
+                                )
+                            if position_result and len(position_result) > 0:
+                                current_position = float(position_result[0][0][0])
+                                positions.append(current_position)
+                                self.get_logger().info(f'Motor {motor_id} (local {local_id}): posición actual {current_position}')
+                            else:
+                                positions.append(0.0)  # Valor por defecto si no se pudo leer
+                                failed_motor_ids.append(motor_id)
+                                self.get_logger().warning(f'No se pudo leer la posición del motor {motor_id}')
                     else:
                         failed_motor_ids.append(motor_id)
                         positions.append(0.0)  # Valor por defecto para motores desconectados
@@ -1615,6 +1908,14 @@ def main():
         import traceback
         print(traceback.format_exc())
     finally:
+        # Stop connection monitoring timer
+        if hasattr(node, 'connection_check_timer') and node.connection_check_timer is not None:
+            try:
+                node.connection_check_timer.cancel()
+                print("Connection monitoring timer stopped")
+            except Exception as e:
+                print(f"Error stopping connection timer: {str(e)}")
+        
         # Cerrar todos los managers
         if hasattr(node, 'managers'):
             for i, manager in enumerate(node.managers):
@@ -1630,8 +1931,16 @@ def main():
                 node.manager.close()
             except Exception as e:
                 print(f"Error al cerrar el manager: {str(e)}")
-        node.destroy_node()
-        rclpy.shutdown()
+        
+        try:
+            node.destroy_node()
+        except Exception as e:
+            print(f"Error destroying node: {str(e)}")
+        
+        try:
+            rclpy.shutdown()
+        except Exception as e:
+            print(f"Error shutting down rclpy: {str(e)}")
 
 if __name__ == '__main__':
     main()
