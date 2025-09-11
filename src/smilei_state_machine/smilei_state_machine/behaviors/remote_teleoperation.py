@@ -9,7 +9,7 @@ import threading
 import numpy as np
 from std_msgs.msg import Float64MultiArray
 from westwood_motor_interfaces.srv import (
-    SetMotorIdAndTarget, GetMotorPositions, GetMotorVelocities,
+    SetMotorIdAndTarget, GetMotorPositions,
     SetMode, SetTorqueEnable, SetGoalIq
 )
 
@@ -49,7 +49,6 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         # Clientes para servicios ROS2
         self.set_position_client = None
         self.get_position_client = None
-        self.get_velocity_client = None
         self.set_mode_client = None
         self.set_torque_client = None
         self.set_iq_client = None
@@ -81,6 +80,14 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         self.position_validation_enabled = True
         self.min_valid_position_change = 0.001  # Mínimo cambio para considerar válido
         self.rejected_positions_count = 0  # Contador de posiciones rechazadas
+        
+        # Variables para estimación de velocidad
+        self.previous_positions = []  # Posiciones previas para calcular velocidad
+        self.estimated_velocities = []  # Velocidades estimadas
+        self.theta_filters = []  # Variables del filtro diferencial para cada motor
+        self.Fc = 35  # Frecuencia de corte del filtro
+        self.Tl = 0.002  # Tiempo del loop principal
+        self.last_time = None  # Para calcular dt real
 
     def setup(self, timeout_sec=None, **kwargs) -> bool:
         """Configurar el comportamiento"""
@@ -140,6 +147,11 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.target_positions = [0.0] * len(self.motor_ids)
             self.goal_iq_list = [0.0] * len(self.motor_ids)
             
+            # Inicializar variables para estimación de velocidad
+            self.previous_positions = [0.0] * len(self.motor_ids)
+            self.estimated_velocities = [0.0] * len(self.motor_ids)
+            self.theta_filters = [0.0] * len(self.motor_ids)
+            
             pass
             
         except Exception as e:
@@ -151,8 +163,6 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             SetMotorIdAndTarget, 'westwood_motor/set_motor_id_and_target')
         self.get_position_client = self.node.create_client(
             GetMotorPositions, 'westwood_motor/get_motor_positions')
-        self.get_velocity_client = self.node.create_client(
-            GetMotorVelocities, 'westwood_motor/get_motor_velocities')
         self.set_mode_client = self.node.create_client(
             SetMode, 'westwood_motor/set_mode')
         self.set_torque_client = self.node.create_client(
@@ -172,7 +182,6 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         for client, name in [
             (self.set_position_client, 'set_motor_id_and_target'),
             (self.get_position_client, 'get_motor_positions'),
-            (self.get_velocity_client, 'get_motor_velocities'),
             (self.set_iq_client, 'set_goal_iq')
         ]:
             if not client.wait_for_service(timeout_sec=timeout_sec):
@@ -251,28 +260,50 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             return False
 
     def get_motor_states(self):
-        """Obtiene posiciones y velocidades actuales de todos los motores"""
+        """Obtiene posiciones actuales y estima velocidades de todos los motores"""
         try:
-            # Enfoque híbrido: lanzar llamadas y esperar un tiempo mínimo
+            # Obtener posiciones de los motores
             req_pos = GetMotorPositions.Request()
             req_pos.motor_ids = self.motor_ids
             future_pos = self.get_position_client.call_async(req_pos)
             
-            req_vel = GetMotorVelocities.Request()
-            req_vel.motor_ids = self.motor_ids
-            future_vel = self.get_velocity_client.call_async(req_vel)
-            
             # Esperar un tiempo mínimo pero no cero
             rclpy.spin_until_future_complete(self.node, future_pos, timeout_sec=0.002)
-            rclpy.spin_until_future_complete(self.node, future_vel, timeout_sec=0.002)
             
             # Procesar resultados si están listos
             if future_pos.done():
                 try:
                     result_pos = future_pos.result()
                     if result_pos and result_pos.success:
-                        old_pos = self.current_positions.copy() if self.current_positions else []
-                        self.current_positions = list(result_pos.positions)
+                        new_positions = list(result_pos.positions)
+                        
+                        # Calcular tiempo transcurrido
+                        current_time = time.time()
+                        if self.last_time is not None:
+                            dt = current_time - self.last_time
+                        else:
+                            dt = self.Tl  # Usar tiempo nominal en la primera iteración
+                        self.last_time = current_time
+                        
+                        # Estimar velocidades usando el algoritmo del filtro diferencial
+                        if len(self.current_positions) == len(new_positions):
+                            for i in range(len(new_positions)):
+                                # Algoritmo de estimación de velocidad del código de referencia:
+                                # vel_stim = Fc * (theta + pos)
+                                # theta = theta - Tl * vel_stim
+                                vel_stim = self.Fc * (self.theta_filters[i] + new_positions[i])
+                                self.theta_filters[i] = self.theta_filters[i] - self.Tl * vel_stim
+                                
+                                # Actualizar velocidad estimada
+                                self.estimated_velocities[i] = vel_stim
+                        else:
+                            # Primera inicialización o cambio en número de motores
+                            self.estimated_velocities = [0.0] * len(new_positions)
+                            self.theta_filters = [0.0] * len(new_positions)
+                        
+                        # Actualizar posiciones actuales
+                        self.current_positions = new_positions
+                        self.current_velocities = self.estimated_velocities.copy()
                         
                         # Actualizar backup de última posición válida
                         if self.current_positions and len(self.current_positions) > 0:
@@ -283,18 +314,10 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                             self._pos_debug_count = 0
                         self._pos_debug_count += 1
                         
-                        
-                        self.node.get_logger().info(f"Position update #{self._pos_debug_count}: {self.current_positions[0]:.6f}")
+                        self.node.get_logger().info(f"Position update #{self._pos_debug_count}: pos={self.current_positions[0]:.6f}, vel_est={self.estimated_velocities[0]:.6f}")
+                            
                 except Exception as e:
                     self.node.get_logger().debug(f"Error processing position result: {str(e)}")
-            
-            if future_vel.done():
-                try:
-                    result_vel = future_vel.result()
-                    if result_vel and result_vel.success:
-                        self.current_velocities = list(result_vel.velocities)
-                except Exception as e:
-                    self.node.get_logger().debug(f"Error processing velocity result: {str(e)}")
             
             return True
         except Exception as e:
