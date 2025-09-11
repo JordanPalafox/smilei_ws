@@ -10,10 +10,11 @@ from westwood_motor_interfaces.srv import GetMotorPositions
 
 class SayHello(py_trees.behaviour.Behaviour):
     """Comportamiento que mueve los motores en un patrón sinusoidal."""
-    def __init__(self, name: str, motor_ids: list[int], node=None):
+    def __init__(self, name: str, motor_ids: list[int], node=None, robot_name: str = ""):
         super().__init__(name)
         self.motor_ids = motor_ids
         self.node = node
+        self.robot_name = robot_name
         self.set_position_client = None
         self.get_position_client = None
         self.running = False
@@ -21,6 +22,11 @@ class SayHello(py_trees.behaviour.Behaviour):
         self.last_time = time.time()
         self.zero_position_sent = False
         self.zero_position_future = None
+
+    def _get_topic_name(self, topic_name):
+        if self.robot_name:
+            return f'/{self.robot_name}/{topic_name.lstrip("/")}'
+        return topic_name
 
     def setup(self, timeout_sec=None, **kwargs) -> bool:
         # Usar el nodo proporcionado en lugar de crear uno nuevo
@@ -32,12 +38,12 @@ class SayHello(py_trees.behaviour.Behaviour):
             
         self.set_position_client = self.node.create_client(
             SetMotorIdAndTarget,
-            'westwood_motor/set_motor_id_and_target'
+            self._get_topic_name('westwood_motor/set_motor_id_and_target')
         )
         
         self.get_position_client = self.node.create_client(
             GetMotorPositions,
-            'westwood_motor/get_motor_positions'
+            self._get_topic_name('westwood_motor/get_motor_positions')
         )
         
         if timeout_sec is None:

@@ -14,10 +14,12 @@ class VelocityPublisher(Node):
         # 1. Declarar parámetros para que sean configurables
         self.declare_parameter('motor_ids', [1])
         self.declare_parameter('publish_frequency', 5.0)
+        self.declare_parameter('robot_name', '')
 
         # Obtener valores de los parámetros
         self.motor_ids = self.get_parameter('motor_ids').get_parameter_value().integer_array_value
         publish_frequency = self.get_parameter('publish_frequency').get_parameter_value().double_value
+        self.robot_name = self.get_parameter('robot_name').value
 
         if not self.motor_ids:
             self.get_logger().error("❌ Parámetro 'motor_ids' no definido o vacío. Saliendo.")
@@ -26,7 +28,7 @@ class VelocityPublisher(Node):
         # Cliente para el servicio
         self.get_velocity_client = self.create_client(
             GetMotorVelocities,
-            'westwood_motor/get_motor_velocities'
+            self._get_topic_name('westwood_motor/get_motor_velocities')
         )
         
         # Esperar a que el servicio esté disponible
@@ -34,12 +36,17 @@ class VelocityPublisher(Node):
             self.get_logger().info('Servicio "get_motor_velocities" no disponible, esperando...')
 
         # Publicador para la velocidad
-        self.velocity_pub = self.create_publisher(Float32MultiArray, 'current_velocities', 10) # Changed topic and type
+        self.velocity_pub = self.create_publisher(Float32MultiArray, self._get_topic_name('current_velocities'), 10) # Changed topic and type
 
         # 2. Usar un Timer en lugar de un hilo y time.sleep()
         timer_period = 1.0 / publish_frequency
         self.timer = self.create_timer(timer_period, self.timer_callback)
         self.get_logger().info(f"✅ Nodo configurado. Publicando velocidades para motores {self.motor_ids} a {publish_frequency} Hz.")
+
+    def _get_topic_name(self, topic_name):
+        if self.robot_name:
+            return f'/{self.robot_name}/{topic_name}'
+        return topic_name
 
     def timer_callback(self):
         """

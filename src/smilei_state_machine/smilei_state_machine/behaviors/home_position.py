@@ -5,13 +5,19 @@ from westwood_motor_interfaces.srv import SetMotorIdAndTarget
 
 class HomePosition(py_trees.behaviour.Behaviour):
     """Behaviour that sends all joints to the home position via ROS2 service"""
-    def __init__(self, name: str, motor_ids: list[int], node=None):
+    def __init__(self, name: str, motor_ids: list[int], node=None, robot_name: str = ""):
         super().__init__(name)
         self.motor_ids = motor_ids
         self.node = node
+        self.robot_name = robot_name
         self.client = None
         self.future = None
         self.own_node = False
+
+    def _get_topic_name(self, topic_name):
+        if self.robot_name:
+            return f'/{self.robot_name}/{topic_name.lstrip("/")}'
+        return topic_name
 
     def setup(self, timeout_sec=None, **kwargs) -> bool:
         # Usar el nodo proporcionado en lugar de crear uno nuevo
@@ -23,7 +29,7 @@ class HomePosition(py_trees.behaviour.Behaviour):
             
         self.client = self.node.create_client(
             SetMotorIdAndTarget,
-            'westwood_motor/set_motor_id_and_target'
+            self._get_topic_name('westwood_motor/set_motor_id_and_target')
         )
         
         if timeout_sec is None:

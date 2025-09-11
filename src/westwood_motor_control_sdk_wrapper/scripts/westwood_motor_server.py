@@ -34,17 +34,13 @@ else:
     from westwood_motor_control_sdk_wrapper import Manager
 
 class WestwoodMotorServer(Node):
-    def __init__(self):
-        super().__init__('westwood_motor_server')
+    def __init__(self, node_name='westwood_motor_server'):
+        super().__init__(node_name)
         self.get_logger().info('Westwood Motor Server started - REALTIME MODE')
         
         # Initialize empty motor mapping for early service setup
         self.motor_to_usb_map = {}
         self.managers = []
-        
-        # Setup services early to ensure they are available
-        self.setup_services()
-        self.get_logger().info('✅ Servicios configurados temprano')
         
         # Parámetros configurables para múltiples USBs
         self.declare_parameter('usb_ports', ['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyUSB2', '/dev/ttyUSB3'])
@@ -84,7 +80,10 @@ class WestwoodMotorServer(Node):
         self.declare_parameter('max_velocity', 10.0)
         self.declare_parameter('max_current', 5.0)
         
+        self.declare_parameter('robot_name', '')
+
         # Obtener parámetros
+        self.robot_name = self.get_parameter('robot_name').value
         self.usb_ports = self.get_parameter('usb_ports').value
         self.baudrate = self.get_parameter('baudrate').value
         # Obtener arrays de motor IDs con manejo de errores
@@ -244,6 +243,11 @@ class WestwoodMotorServer(Node):
             self.get_logger().error(f'❌ Error al configurar servicios: {str(e)}')
             import traceback
             self.get_logger().error(traceback.format_exc())
+
+    def _get_topic_name(self, topic_name):
+        if self.robot_name:
+            return f'/{self.robot_name}/{topic_name}'
+        return topic_name
     
     def setup_realtime_scheduling(self):
         """Configure realtime scheduling for the server process"""
@@ -436,7 +440,7 @@ class WestwoodMotorServer(Node):
         try:
             self.set_motor_id_and_target_service = self.create_service(
                 SetMotorIdAndTarget,
-                'westwood_motor/set_motor_id_and_target',
+                self._get_topic_name('westwood_motor/set_motor_id_and_target'),
                 self.handle_motor_ids_and_target
             )
         except Exception as e:
@@ -446,7 +450,7 @@ class WestwoodMotorServer(Node):
         try:
             self.set_motor_id_and_target_velocity_service = self.create_service(
                 SetMotorIdAndTargetVelocity,
-                'westwood_motor/set_motor_id_and_target_velocity',
+                self._get_topic_name('westwood_motor/set_motor_id_and_target_velocity'),
                 self.handle_motor_ids_and_target_velocity
             )
         except Exception as e:
@@ -455,69 +459,69 @@ class WestwoodMotorServer(Node):
         # Añadir servicio para obtener posiciones actuales de motores
         self.get_motor_positions_service = self.create_service(
             GetMotorPositions,
-            'westwood_motor/get_motor_positions',
+            self._get_topic_name('westwood_motor/get_motor_positions'),
             self.handle_get_motor_positions
         )
 
         # Añadir servicio para obtener velocidades actuales de motores
         self.get_motor_velocities_service = self.create_service(
             GetMotorVelocities,
-            'westwood_motor/get_motor_velocities',
+            self._get_topic_name('westwood_motor/get_motor_velocities'),
             self.handle_get_motor_velocities
         )
 
         # Añadir servicio para obtener corrientes actuales de motores
         self.get_motor_currents_service = self.create_service(
             GetMotorCurrents,
-            'westwood_motor/get_motor_currents',
+            self._get_topic_name('westwood_motor/get_motor_currents'),
             self.handle_get_motor_currents
         )
         
         # Añadir servicio para obtener IDs de motores disponibles
         self.get_available_motors_service = self.create_service(
             GetAvailableMotors,
-            'westwood_motor/get_available_motors',
+            self._get_topic_name('westwood_motor/get_available_motors'),
             self.handle_get_available_motors
         )
         
         # Añadir servicio para configurar ganancias de control de posición
         self.set_position_gains_service = self.create_service(
             SetGains,
-            'westwood_motor/set_position_gains',
+            self._get_topic_name('westwood_motor/set_position_gains'),
             self.handle_set_position_gains
         )
         
         # Añadir servicio para configurar ganancias de control de corriente
         self.set_current_gains_service = self.create_service(
             SetGains,
-            'westwood_motor/set_current_gains',
+            self._get_topic_name('westwood_motor/set_current_gains'),
             self.handle_set_current_gains
         )
         
         # Añadir servicio para configurar el modo de operación
         self.set_mode_service = self.create_service(
             SetMode,
-            'westwood_motor/set_mode',
+            self._get_topic_name('westwood_motor/set_mode'),
             self.handle_set_mode
         )
         
         # Añadir servicio para habilitar/deshabilitar el torque
         self.set_torque_enable_service = self.create_service(
             SetTorqueEnable,
-            'westwood_motor/set_torque_enable',
+            self._get_topic_name('westwood_motor/set_torque_enable'),
             self.handle_set_torque_enable
         )
         
         # Añadir servicio para establecer corriente iq objetivo
         self.set_goal_iq_service = self.create_service(
             SetGoalIq,
-            'westwood_motor/set_goal_iq',
+            self._get_topic_name('westwood_motor/set_goal_iq'),
             self.handle_set_goal_iq
         )
 
         self.set_motor_id_and_target_current_service = self.create_service(
             SetMotorIdAndTargetCurrent,
-            'westwood_motor/set_motor_id_and_target_current',
+            self._get_topic_name('westwood_motor/set_motor_id_and_target_current'),
             self.handle_set_motor_id_and_target_current
         )
         
@@ -1602,7 +1606,18 @@ class WestwoodMotorServer(Node):
 
 def main():
     rclpy.init()
-    node = WestwoodMotorServer()
+    
+    # Temporary node to get robot_name
+    temp_node = rclpy.create_node('temp_parameter_parser_server')
+    temp_node.declare_parameter('robot_name', '')
+    robot_name = temp_node.get_parameter('robot_name').value
+    temp_node.destroy_node()
+
+    node_name = 'westwood_motor_server'
+    if robot_name:
+        node_name = f"{robot_name}_{node_name}"
+
+    node = WestwoodMotorServer(node_name=node_name)
     try:
         # Use MultiThreadedExecutor for concurrent service calls
         executor = MultiThreadedExecutor()

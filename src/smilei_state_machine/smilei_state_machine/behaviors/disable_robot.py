@@ -6,14 +6,20 @@ from westwood_motor_interfaces.srv import SetTorqueEnable
 
 class DisableRobot(py_trees.behaviour.Behaviour):
     """Comportamiento que deshabilita los motores y los pone en un estado seguro"""
-    def __init__(self, name: str, motor_ids: list[int], node=None):
+    def __init__(self, name: str, motor_ids: list[int], node=None, robot_name: str = ""):
         super().__init__(name)
         self.motor_ids = motor_ids
         self.node = node
+        self.robot_name = robot_name
         self.set_position_client = None
         self.set_torque_client = None
         self.flag = True
         self.own_node = False
+
+    def _get_topic_name(self, topic_name):
+        if self.robot_name:
+            return f'/{self.robot_name}/{topic_name.lstrip("/")}'
+        return topic_name
         
     def setup(self, timeout_sec=None, **kwargs) -> bool:
         # Usar el nodo proporcionado en lugar de crear uno nuevo
@@ -25,12 +31,12 @@ class DisableRobot(py_trees.behaviour.Behaviour):
             
         self.set_position_client = self.node.create_client(
             SetMotorIdAndTarget,
-            'westwood_motor/set_motor_id_and_target'
+            self._get_topic_name('westwood_motor/set_motor_id_and_target')
         )
         
         self.set_torque_client = self.node.create_client(
             SetTorqueEnable,
-            'westwood_motor/set_torque_enable'
+            self._get_topic_name('westwood_motor/set_torque_enable')
         )
         
         if timeout_sec is None:

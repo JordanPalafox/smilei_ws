@@ -21,9 +21,10 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
     
     Basado en el código original de teleoperación remota de main.py
     """
-    def __init__(self, name: str, motor_ids=None, node=None):
+    def __init__(self, name: str, motor_ids=None, node=None, robot_name: str = ""):
         super().__init__(name)
         self.node = node
+        self.robot_name = robot_name
         self.running = False
         self.own_node = False
         
@@ -81,6 +82,11 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         self.position_validation_enabled = True
         self.min_valid_position_change = 0.001  # Mínimo cambio para considerar válido
         self.rejected_positions_count = 0  # Contador de posiciones rechazadas
+
+    def _get_topic_name(self, topic_name):
+        if self.robot_name:
+            return f'/{self.robot_name}/{topic_name.lstrip("/")}'
+        return topic_name
 
     def setup(self, timeout_sec=None, **kwargs) -> bool:
         """Configurar el comportamiento"""
@@ -148,21 +154,21 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         
         # Crear clientes para servicios
         self.set_position_client = self.node.create_client(
-            SetMotorIdAndTarget, 'westwood_motor/set_motor_id_and_target')
+            SetMotorIdAndTarget, self._get_topic_name('westwood_motor/set_motor_id_and_target'))
         self.get_position_client = self.node.create_client(
-            GetMotorPositions, 'westwood_motor/get_motor_positions')
+            GetMotorPositions, self._get_topic_name('westwood_motor/get_motor_positions'))
         self.get_velocity_client = self.node.create_client(
-            GetMotorVelocities, 'westwood_motor/get_motor_velocities')
+            GetMotorVelocities, self._get_topic_name('westwood_motor/get_motor_velocities'))
         self.set_mode_client = self.node.create_client(
-            SetMode, 'westwood_motor/set_mode')
+            SetMode, self._get_topic_name('westwood_motor/set_mode'))
         self.set_torque_client = self.node.create_client(
-            SetTorqueEnable, 'westwood_motor/set_torque_enable')
+            SetTorqueEnable, self._get_topic_name('westwood_motor/set_torque_enable'))
         self.set_iq_client = self.node.create_client(
-            SetGoalIq, 'westwood_motor/set_goal_iq')
+            SetGoalIq, self._get_topic_name('westwood_motor/set_goal_iq'))
         
         # Crear publisher si está habilitado
         if self.publish_goal_iq:
-            self.goal_iq_publisher = self.node.create_publisher(Float64MultiArray, 'debug/goal_iq', 10)
+            self.goal_iq_publisher = self.node.create_publisher(Float64MultiArray, self._get_topic_name('debug/goal_iq'), 10)
         
         if timeout_sec is None:
             timeout_sec = 1.0
@@ -822,4 +828,4 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         
         # Solo destruir nodo si lo creamos nosotros
         if self.own_node and self.node:
-            self.node.destroy_node()
+            self.node.destroy_node() 

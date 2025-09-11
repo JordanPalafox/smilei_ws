@@ -148,12 +148,31 @@ def spin_ros(node):
 
 def main():
     rclpy.init()
-    node = Node('state_machine_node')
+    
+    # Temporary node to get robot_name
+    temp_node = rclpy.create_node('temp_state_machine_parser')
+    temp_node.declare_parameter('robot_name', '')
+    robot_name = temp_node.get_parameter('robot_name').value
+    temp_node.destroy_node()
+
+    node_name = 'state_machine_node'
+    if robot_name:
+        node_name = f'{robot_name}_{node_name}'
+
+    node = Node(node_name)
+
+    node.declare_parameter('robot_name', '')
+    robot_name = node.get_parameter('robot_name').value
+
+    def get_topic_name(topic_name):
+        if robot_name:
+            return f'/{robot_name}/{topic_name.lstrip("/")}'
+        return topic_name
 
     # Crear suscriptor para recibir comandos de estado
     state_command_sub = node.create_subscription(
         String,
-        'state_command',
+        get_topic_name('state_command'),
         state_command_callback,
         10
     )
@@ -181,30 +200,30 @@ def main():
         
         # Advertir si faltan servicios importantes
         expected_services = [
-            '/westwood_motor/set_motor_id_and_target',
-            '/westwood_motor/get_motor_positions',
-            '/westwood_motor/get_available_motors',
-            '/westwood_motor/set_position_gains',
-            '/westwood_motor/set_mode',
-            '/westwood_motor/set_torque_enable',
-            '/westwood_motor/set_goal_iq'
+            'westwood_motor/set_motor_id_and_target',
+            'westwood_motor/get_motor_positions',
+            'westwood_motor/get_available_motors',
+            'westwood_motor/set_position_gains',
+            'westwood_motor/set_mode',
+            'westwood_motor/set_torque_enable',
+            'westwood_motor/set_goal_iq'
         ]
         
         for service in expected_services:
-            if service not in available_services:
-                node.get_logger().warn(f"Servicio esperado no disponible: {service}")
+            if get_topic_name(service) not in available_services:
+                node.get_logger().warn(f"Servicio esperado no disponible: {get_topic_name(service)}")
     except Exception as e:
         node.get_logger().error(f"Error al comprobar servicios: {str(e)}")
 
     # Crear comportamientos (pasando el nodo a cada uno)
     idle = py_trees.behaviours.Running(name="IdleBehavior")  # Comportamiento simple para estado idle
-    enable = EnableRobot(name="EnableRobot", motor_ids=motor_ids, node=node)
-    home = HomePosition(name="GoHome", motor_ids=motor_ids, node=node)
-    zero = ZeroPosition(name="GoZero", motor_ids=motor_ids, node=node)
-    say_hello = SayHello(name="SayHello", motor_ids=motor_ids, node=node)
-    teleoperation = LocalTeleoperation(name="LocalTeleoperation", motor_ids=motor_ids, node=node)
-    remote_teleoperation = RemoteTeleoperation(name="RemoteTeleoperation", motor_ids=motor_ids, node=node)
-    disable = DisableRobot(name="DisableRobot", motor_ids=motor_ids, node=node)
+    enable = EnableRobot(name="EnableRobot", motor_ids=motor_ids, node=node, robot_name=robot_name)
+    home = HomePosition(name="GoHome", motor_ids=motor_ids, node=node, robot_name=robot_name)
+    zero = ZeroPosition(name="GoZero", motor_ids=motor_ids, node=node, robot_name=robot_name)
+    say_hello = SayHello(name="SayHello", motor_ids=motor_ids, node=node, robot_name=robot_name)
+    teleoperation = LocalTeleoperation(name="LocalTeleoperation", motor_ids=motor_ids, node=node, robot_name=robot_name)
+    remote_teleoperation = RemoteTeleoperation(name="RemoteTeleoperation", motor_ids=motor_ids, node=node, robot_name=robot_name)
+    disable = DisableRobot(name="DisableRobot", motor_ids=motor_ids, node=node, robot_name=robot_name)
 
     # Crear comportamiento raíz personalizado
     root = StateMachineRoot()

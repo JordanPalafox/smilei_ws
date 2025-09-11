@@ -67,9 +67,11 @@ smilei_state_machine:
       # Gravedad
       g: 9.81
 
-# Configuración específica para el nodo state_machine_node
-state_machine_node:
+# Configuración global para todos los nodos del proceso
+/**:
   ros__parameters:
+    robot_name: 'operador'  # Nombre del robot
+    
     # Configuración para teleoperación remota
     remote_teleoperation:
       # Configuración de red

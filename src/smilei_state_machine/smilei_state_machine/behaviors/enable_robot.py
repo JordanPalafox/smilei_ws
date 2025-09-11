@@ -8,7 +8,7 @@ from westwood_motor_interfaces.srv import SetTorqueEnable
 import numpy as np
 
 class EnableRobot(py_trees.behaviour.Behaviour):
-    def __init__(self, name, motor_ids, node):
+    def __init__(self, name, motor_ids, node, robot_name: str = ""):
         """
         Inicializar el comportamiento.
         
@@ -20,30 +20,36 @@ class EnableRobot(py_trees.behaviour.Behaviour):
         super(EnableRobot, self).__init__(name)
         self.motor_ids = motor_ids
         self.node = node
+        self.robot_name = robot_name
         self.logger = self.node.get_logger()
         
         
         # Crear clientes para los servicios
         self.get_available_motors_client = self.node.create_client(
             GetAvailableMotors, 
-            'westwood_motor/get_available_motors'
+            self._get_topic_name('westwood_motor/get_available_motors')
         )
         
         
         self.set_mode_client = self.node.create_client(
             SetMode, 
-            'westwood_motor/set_mode'
+            self._get_topic_name('westwood_motor/set_mode')
         )
         
         self.set_torque_enable_client = self.node.create_client(
             SetTorqueEnable, 
-            'westwood_motor/set_torque_enable'
+            self._get_topic_name('westwood_motor/set_torque_enable')
         )
         
         # Variables para controlar el flujo de ejecución
         self.setup_complete = False
         self.error = False
         self.available_motors = []
+
+    def _get_topic_name(self, topic_name):
+        if self.robot_name:
+            return f'/{self.robot_name}/{topic_name.lstrip("/")}'
+        return topic_name
         
     def setup(self, **kwargs):
         """

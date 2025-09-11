@@ -25,7 +25,7 @@ def generate_launch_description():
     state_machine_node = Node(
         package='smilei_state_machine',
         executable='state_machine',
-        name='state_machine_node',
+        # name='state_machine_node', # El nombre ahora se establece dinámicamente en el script
         parameters=[LaunchConfiguration('params_file')],
         output='screen',
         emulate_tty=True
