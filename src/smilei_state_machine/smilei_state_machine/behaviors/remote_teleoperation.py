@@ -71,6 +71,10 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         
         # Variables para logging de posición
         self.send_position_count = 0
+        self.last_valid_positions = []  # Backup de última posición válida
+        self.position_validation_enabled = True
+        self.min_valid_position_change = 0.001  # Mínimo cambio para considerar válido
+        self.rejected_positions_count = 0  # Contador de posiciones rechazadas
 
     def setup(self, timeout_sec=None, **kwargs) -> bool:
         """Configurar el comportamiento"""
@@ -257,6 +261,10 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                         old_pos = self.current_positions.copy() if self.current_positions else []
                         self.current_positions = list(result_pos.positions)
                         
+                        # Actualizar backup de última posición válida
+                        if self.current_positions and len(self.current_positions) > 0:
+                            self.last_valid_positions = self.current_positions.copy()
+                        
                         # Debug cada 1000 actualizaciones en lugar de cada cambio
                         if not hasattr(self, '_pos_debug_count'):
                             self._pos_debug_count = 0
@@ -286,20 +294,29 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             return
         
         try:
-            # Verificar que tenemos posiciones actuales válidas
-            if not self.current_positions or len(self.current_positions) == 0:
+            # Usar current_positions si están disponibles y son válidas
+            positions_to_use = None
+            
+            # Primero intentar current_positions
+            if self.current_positions and self.validate_positions(self.current_positions):
+                positions_to_use = self.current_positions.copy()
+            # Si current_positions no es válido, usar last_valid_positions
+            elif self.last_valid_positions and self.validate_positions(self.last_valid_positions):
+                positions_to_use = self.last_valid_positions.copy()
+            else:
+                # No hay posiciones válidas disponibles, no enviar nada
                 return
-                
-            # Usar las posiciones actuales del motor (no las target)
-            pos_to_send = self.current_positions.copy()
+            
+            # Extraer solo las posiciones que necesitamos
+            pos_to_send = positions_to_use[:len(self.motor_ids)]
+            
+            # Verificación final de longitud
+            if len(pos_to_send) != len(self.motor_ids):
+                return
             
             # Crear formato dinámico basado en número de motores
             num_motors = len(self.motor_ids)
             format_str = f'{num_motors}f'
-            
-            # Asegurar que tenemos suficientes posiciones
-            while len(pos_to_send) < num_motors:
-                pos_to_send.append(0.0)
             
             # Empaquetar solo los datos necesarios
             struct_data = struct.pack(format_str, *pos_to_send[:num_motors])
@@ -309,7 +326,8 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             # Mostrar posición enviada cada 100 envíos
             self.send_position_count += 1
             pos_str = ", ".join([f"{pos:.6f}" for pos in pos_to_send[:num_motors]])
-            self.node.get_logger().info(f"Sending REAL position: [{pos_str}] (current_positions len: {len(self.current_positions)})")
+            source = "current" if positions_to_use == self.current_positions else "backup"
+            self.node.get_logger().info(f"Sending REAL position: [{pos_str}] (source: {source})")
             
         except Exception as e:
             self.node.get_logger().warning(f"Error enviando posiciones: {str(e)}")
@@ -338,7 +356,6 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             
             if self._receive_count % 1 == 0:
                 pos_str = ", ".join([f"{pos:.3f}" for pos in struct_data[:num_motors]])
-                self.node.get_logger().info(f"RECV: [{pos_str}]")
                 
         except socket.timeout:
             pass  # Timeout normal
@@ -555,7 +572,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         # Primer término: -kp * |error_local|^p1 * sign(error_local)
         error_magnitude = abs(error_local)
         error_sign = math.copysign(1, error_local) if error_local != 0 else 0
-        first_term = -self.kp * (error_magnitude ** 0.75) * error_sign
+        first_term = -self.kp * (error_magnitude ** 1.0) * error_sign
         
         # Segundo término: -kd * |motor_velocity|^p2 * sign(motor_velocity)  
         velocity_magnitude = abs(local_motor_velocity)
@@ -566,6 +583,44 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         TL = first_term + second_term
         
         return TL
+
+    def validate_positions(self, positions):
+        """
+        Valida que las posiciones sean reales y razonables
+        
+        Args:
+            positions: Lista de posiciones a validar
+            
+        Returns:
+            bool: True si las posiciones son válidas
+        """
+        if not positions or len(positions) == 0:
+            return False
+        
+        for i, pos in enumerate(positions[:len(self.motor_ids)]):
+            # Verificar que sea un número válido
+            if not isinstance(pos, (int, float)) or pos != pos or abs(pos) == float('inf'):
+                return False
+            
+            # Verificar saltos bruscos que indican lecturas corruptas
+            if self.last_valid_positions and len(self.last_valid_positions) > i:
+                last_pos = self.last_valid_positions[i]
+                current_pos = pos
+                
+                # Detectar saltos bruscos: si había una posición significativa y ahora es muy pequeña
+                if abs(last_pos) > 0.1 and abs(current_pos) < 0.01:
+                    # Salto de >0.1 a <0.01 - probablemente lectura corrupta
+                    return False
+                
+                # Detectar saltos extremadamente grandes (>1.0 cambio instantáneo)  
+                if abs(current_pos - last_pos) > 1.0:
+                    return False
+            
+            # Rechazar valores extremadamente pequeños que probablemente son ruido
+            if abs(pos) < 0.005:  # Menos de 5mm es probablemente ruido
+                return False
+        
+        return True
 
     def send_current_commands(self, currents):
         """Envía comandos de corriente a los motores"""
