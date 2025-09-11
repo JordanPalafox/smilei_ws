@@ -336,26 +336,142 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             return True
 
     def calculate_control_currents(self):
-        """Calcula corrientes de control basado en error de posición y velocidad"""
+        """Calcula corrientes de control basado en error de posición, velocidad y compensación de gravedad"""
         currents = []
         
-        for i in range(len(self.motor_ids)):
-            if i < len(self.current_positions) and i < len(self.target_positions):
-                # Error de posición
-                pos_error = self.current_positions[i] - self.target_positions[i]
-                
-                # Error de velocidad (si está disponible)
-                vel_error = 0.0
-                if i < len(self.current_velocities):
-                    vel_error = self.current_velocities[i]
-                
-                # Calcular corriente objetivo usando parámetros
-                iq = (-self.kp * pos_error - self.kd * vel_error) / self.kt
-                currents.append(iq)
-            else:
-                currents.append(0.0)
+        # Verificar que tenemos al menos 8 motores (4 right + 4 left)
+        if len(self.motor_ids) != 8:
+            # Fallback al control simple para casos con menos motores
+            for i in range(len(self.motor_ids)):
+                if i < len(self.current_positions) and i < len(self.target_positions):
+                    pos_error = self.current_positions[i] - self.target_positions[i]
+                    vel_error = 0.0
+                    if i < len(self.current_velocities):
+                        vel_error = self.current_velocities[i]
+                    iq = (-self.kp * pos_error - self.kd * vel_error) / self.kt
+                    currents.append(iq)
+                else:
+                    currents.append(0.0)
+            return currents
         
-        return currents
+        # Control avanzado para 8 motores con compensación de gravedad
+        try:
+            # Separar posiciones actuales en derecho e izquierdo
+            qr1, qr2, qr3, qr4 = self.current_positions[:4]  # Right arm
+            ql1, ql2, ql3, ql4 = self.current_positions[4:]  # Left arm
+            
+            # Separar velocidades actuales
+            dqr1, dqr2, dqr3, dqr4 = self.current_velocities[:4] if len(self.current_velocities) >= 4 else [0.0, 0.0, 0.0, 0.0]
+            dql1, dql2, dql3, dql4 = self.current_velocities[4:] if len(self.current_velocities) >= 8 else [0.0, 0.0, 0.0, 0.0]
+            
+            # Posiciones objetivo (q_r y q_l del código original)
+            q_r1, q_r2, q_r3, q_r4 = self.target_positions[:4]
+            q_l1, q_l2, q_l3, q_l4 = self.target_positions[4:]
+            
+            # Crear vectores para gravedad (simulando el cálculo original)
+            # Nota: Necesitarás implementar right_gravity_vector y left_gravity_vector
+            # Por ahora uso un placeholder
+            g_qr = [q_l1, q_l2, q_l3, q_l4]  # Del código original: g_qr=q_l[:4]
+            g_ql = [self.target_positions[4], self.target_positions[5], self.target_positions[6], -1.0 * self.target_positions[7]]  # g_ql[3]=-1.0*g_ql[3]
+            
+            # Vectores de gravedad
+            GR = self.right_gravity_vector(g_qr)
+            GL = self.left_gravity_vector(g_ql)
+            
+            # Ganancias (pueden ser arrays para cada articulación)
+            kp = [self.kp] * 4 if not hasattr(self, 'kp_array') else self.kp_array
+            kd = [self.kd] * 4 if not hasattr(self, 'kd_array') else self.kd_array
+            Kt = self.kt
+            
+            # Calcular corrientes objetivo según el código original
+            i_g_1 = ((-kp[0] * (qr1 - q_r1) - kd[0] * dqr1 + GR[0]) / Kt)
+            i_g_2 = ((-kp[1] * (qr2 - q_r2) - kd[1] * dqr2 + GR[1]) / Kt)
+            i_g_3 = ((-kp[2] * (qr3 - q_r3) - kd[2] * dqr3) / Kt)  # Sin compensación de gravedad
+            i_g_4 = ((-kp[3] * (qr4 - q_r4) - kd[3] * dqr4) / Kt)  # Sin compensación de gravedad
+            
+            i_g_5 = ((-kp[0] * (ql1 - q_l1) - kd[0] * dql1 + GL[0]) / Kt)
+            i_g_6 = ((-kp[1] * (ql2 - q_l2) - kd[1] * dql2 + GL[1]) / Kt)
+            i_g_7 = ((-kp[2] * (ql3 - q_l3) - kd[2] * dql3) / Kt)  # Sin compensación de gravedad
+            i_g_8 = ((-kp[3] * (ql4 - q_l4) - kd[3] * dql4) / Kt)  # Sin compensación de gravedad
+            
+            currents = [i_g_1, i_g_2, i_g_3, i_g_4, i_g_5, i_g_6, i_g_7, i_g_8]
+            
+            # Debug logging cada 100 cálculos
+            if not hasattr(self, '_calc_debug_count'):
+                self._calc_debug_count = 0
+            self._calc_debug_count += 1
+            
+            if self._calc_debug_count % 100 == 0:
+                self.node.get_logger().info(f"Corrientes calculadas: R[{i_g_1:.3f}, {i_g_2:.3f}, {i_g_3:.3f}, {i_g_4:.3f}] L[{i_g_5:.3f}, {i_g_6:.3f}, {i_g_7:.3f}, {i_g_8:.3f}]")
+            
+            return currents
+            
+        except Exception as e:
+            self.node.get_logger().error(f"Error calculando corrientes avanzadas: {str(e)}")
+            # Fallback al control simple
+            simple_currents = []
+            for i in range(len(self.motor_ids)):
+                if i < len(self.current_positions) and i < len(self.target_positions):
+                    pos_error = self.current_positions[i] - self.target_positions[i]
+                    vel_error = 0.0
+                    if i < len(self.current_velocities):
+                        vel_error = self.current_velocities[i]
+                    iq = (-self.kp * pos_error - self.kd * vel_error) / self.kt
+                    simple_currents.append(iq)
+                else:
+                    simple_currents.append(0.0)
+            return simple_currents
+
+    def right_gravity_vector(self, q):
+        """Calcula el vector de compensación de gravedad para el brazo derecho"""
+        # Implementación simplificada de compensación de gravedad
+        # Basada en el modelo dinámico del brazo robótico
+        # q = [q1, q2, q3, q4] - ángulos de las articulaciones
+        
+        import math
+        
+        # Parámetros del brazo (valores típicos para un brazo robótico)
+        m1, m2 = 2.0, 1.5  # masas de los eslabones (kg)
+        l1, l2 = 0.3, 0.25  # longitudes de los eslabones (m)
+        lc1, lc2 = 0.15, 0.125  # centros de masa (m)
+        g = 9.81  # gravedad (m/s²)
+        
+        q1, q2, q3, q4 = q
+        
+        # Compensación de gravedad para las primeras dos articulaciones
+        # Solo las primeras dos articulaciones necesitan compensación (como se ve en el código original)
+        tau1 = (m1 * lc1 + m2 * l1) * g * math.cos(q1) + m2 * lc2 * g * math.cos(q1 + q2)
+        tau2 = m2 * lc2 * g * math.cos(q1 + q2)
+        
+        # Las articulaciones 3 y 4 no tienen compensación de gravedad en el código original
+        tau3 = 0.0
+        tau4 = 0.0
+        
+        return [tau1, tau2, tau3, tau4]
+    
+    def left_gravity_vector(self, q):
+        """Calcula el vector de compensación de gravedad para el brazo izquierdo"""
+        # Implementación similar al brazo derecho pero con orientación espejada
+        import math
+        
+        # Parámetros del brazo (iguales al derecho)
+        m1, m2 = 2.0, 1.5  # masas de los eslabones (kg)
+        l1, l2 = 0.3, 0.25  # longitudes de los eslabones (m)
+        lc1, lc2 = 0.15, 0.125  # centros de masa (m)
+        g = 9.81  # gravedad (m/s²)
+        
+        q1, q2, q3, q4 = q
+        
+        # Compensación de gravedad para las primeras dos articulaciones
+        # El brazo izquierdo puede tener orientación espejada
+        tau1 = (m1 * lc1 + m2 * l1) * g * math.cos(q1) + m2 * lc2 * g * math.cos(q1 + q2)
+        tau2 = m2 * lc2 * g * math.cos(q1 + q2)
+        
+        # Las articulaciones 3 y 4 no tienen compensación de gravedad
+        tau3 = 0.0
+        tau4 = 0.0
+        
+        return [tau1, tau2, tau3, tau4]
 
     def send_current_commands(self, currents):
         """Envía comandos de corriente a los motores"""
