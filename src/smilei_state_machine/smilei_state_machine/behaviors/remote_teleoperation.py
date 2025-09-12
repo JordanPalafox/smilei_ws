@@ -2,7 +2,6 @@ import py_trees
 import rclpy
 import time
 import sys
-import select
 import socket
 import struct
 import threading
@@ -81,7 +80,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             # Declarar parámetros - configuración flexible para número de motores
             self.node.declare_parameter('remote_teleoperation.motor_ids', [1])  # Por defecto un motor
             self.node.declare_parameter('remote_teleoperation.is_machine_a', True)
-            self.node.declare_parameter('remote_teleoperation.machine_a_ip', '192.168.4.1')
+            self.node.declare_parameter('remote_teleoperation.machine_a_ip', '192.168.4.241')
             self.node.declare_parameter('remote_teleoperation.machine_b_ip', '192.168.4.254')
             self.node.declare_parameter('remote_teleoperation.num_total_motors', 2)  # Total de motores en el sistema (A+B)
             
@@ -529,12 +528,14 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         if not self.running:
             return py_trees.common.Status.SUCCESS
         
-        # Verificar entrada del usuario para terminar
-        if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
-            line = sys.stdin.readline().strip()
-            self.node.get_logger().info("Terminado por usuario")
-            self.running = False
-            return py_trees.common.Status.SUCCESS
+        # Verificar entrada del usuario para terminar - COMENTADO para ROS
+        # En ROS no necesitamos esta verificación de stdin ya que el comportamiento
+        # se maneja a través de la state machine
+        # if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
+        #     line = sys.stdin.readline().strip()
+        #     self.node.get_logger().info("Terminado por usuario")
+        #     self.running = False
+        #     return py_trees.common.Status.SUCCESS
         
         try:
             # Paso 1: Obtener estados actuales de motores (como en while True del código original)
