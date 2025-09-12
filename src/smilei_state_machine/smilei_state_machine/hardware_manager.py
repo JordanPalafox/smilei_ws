@@ -14,6 +14,11 @@ class HardwareManager:
         self.auto_detect = auto_detect
         self.debug = debug
         
+        # Cache para reducir llamadas redundantes
+        self.position_cache = {}
+        self.velocity_cache = {}
+        self.cache_timeout = 0.001  # 1ms cache like pd_control_node.py
+        
         # Mapeo de motor ID global a información del USB
         self.motor_to_usb_map = {}
         self.managers = []
@@ -305,28 +310,25 @@ class HardwareManager:
                 if self.debug:
                     self.node.get_logger().info(f"Motor {motor_id} raw result: {result}")
                 
-                # Parse the result more robustly
+                # Parse de forma consistente con pd_control_node.py línea 67:
+                # self.pos1 = self.bear.get_present_position(self.m_id_1)[0][0][0]
                 position = 0.0
-                if result is not None:
-                    # Handle different possible formats from Pybear
-                    if isinstance(result, (list, tuple)) and len(result) > 0:
-                        # Try to extract the first numeric value found
-                        def extract_number(data):
-                            if isinstance(data, (int, float)):
-                                return float(data)
-                            elif isinstance(data, (list, tuple)) and len(data) > 0:
-                                return extract_number(data[0])
-                            else:
-                                return 0.0
-                        
-                        position = extract_number(result)
-                    elif isinstance(result, (int, float)):
-                        position = float(result)
+                if result is not None and len(result) > 0:
+                    # Formato [[[position]]] -> extraer [0][0][0]
+                    if isinstance(result[0], (list, tuple)) and len(result[0]) > 0:
+                        if isinstance(result[0][0], (list, tuple)) and len(result[0][0]) > 0:
+                            position = float(result[0][0][0])
+                        else:
+                            position = float(result[0][0])
+                    else:
+                        position = float(result[0])
                 
                 positions.append(position)
                 
             except Exception as e:
-                self.node.get_logger().warning(f"Error leyendo posición motor {motor_id}: {e}")
+                # Manejo silencioso de errores de comunicación como en pd_control_node.py
+                if 'list index out of range' not in str(e) and 'device disconnected' not in str(e):
+                    self.node.get_logger().debug(f"Error leyendo posición motor {motor_id}: {e}")
                 positions.append(0.0)
         
         return positions
@@ -779,6 +781,46 @@ class HardwareManager:
                 success = False
         
         return success
+
+    def get_present_velocity(self, *motor_ids):
+        """Obtener velocidades actuales usando IDs globales con formato pd_control_node.py"""
+        if not self.hardware_connected:
+            # Modo simulación - devolver velocidades cero
+            return [0.0 for _ in motor_ids]
+        
+        velocities = []
+        for motor_id in motor_ids:
+            manager, local_id = self.get_manager_for_motor(motor_id)
+            if manager is None or local_id is None:
+                velocities.append(0.0)
+                continue
+            
+            try:
+                # Usar el mismo formato que pd_control_node.py línea 69:
+                # self.vel1 = self.bear.get_present_velocity(self.m_id_1)[0][0][0]
+                result = manager.get_present_velocity(local_id)
+                
+                # Parse de forma consistente con pd_control_node.py
+                velocity = 0.0
+                if result is not None and len(result) > 0:
+                    # Formato [[[velocity]]] -> extraer [0][0][0]
+                    if isinstance(result[0], (list, tuple)) and len(result[0]) > 0:
+                        if isinstance(result[0][0], (list, tuple)) and len(result[0][0]) > 0:
+                            velocity = float(result[0][0][0])
+                        else:
+                            velocity = float(result[0][0])
+                    else:
+                        velocity = float(result[0])
+
+                velocities.append(velocity)
+                
+            except Exception as e:
+                # Manejo silencioso de errores de comunicación como en pd_control_node.py
+                if 'list index out of range' not in str(e) and 'device disconnected' not in str(e):
+                    self.node.get_logger().debug(f"Error leyendo velocidad motor {motor_id}: {e}")
+                velocities.append(0.0)
+        
+        return velocities
 
     def close(self):
         """Cerrar todas las conexiones"""

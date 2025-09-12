@@ -259,47 +259,30 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             return False
 
     def get_motor_states(self):
-        """Obtiene posiciones y velocidades de motores locales"""
+        """Obtiene posiciones y velocidades usando hardware_manager mejorado con formato pd_control_node.py"""
         try:
             if not self.hardware_manager:
                 # Modo simulación - mantener estados actuales
                 return True
             
-            # Obtener posiciones solo de motores locales disponibles
-            positions = []
-            velocities = []
+            # Obtener posiciones y velocidades usando los métodos mejorados del hardware_manager
+            positions = self.hardware_manager.get_present_position(*self.motor_ids)
+            velocities = self.hardware_manager.get_present_velocity(*self.motor_ids)
             
-            for i, motor_id in enumerate(self.motor_ids):
-                try:
-                    # Posición actual
-                    pos_result = self.hardware_manager.get_present_position(motor_id)
-                    if pos_result and len(pos_result) > 0:
-                        pos = pos_result[0] if isinstance(pos_result[0], (int, float)) else 0.0
-                    else:
-                        pos = 0.0
-                    positions.append(pos)
-                    
-                    # Velocidad - estimación simple basada en cambio de posición
-                    if i < len(self.current_positions):
-                        vel = (pos - self.current_positions[i]) / 0.001  # dt aproximado
-                    else:
-                        vel = 0.0
-                    velocities.append(vel)
-                    
-                except Exception as e:
-                    self.node.get_logger().warning(f"Error leyendo motor {motor_id}: {e}")
-                    positions.append(0.0)
-                    velocities.append(0.0)
-            
-            # Actualizar solo los estados locales (no rellenar con ceros)
-            self.current_positions = positions[:]
-            self.current_velocities = velocities[:]
+            # Validar que obtuvimos datos válidos
+            if len(positions) == len(self.motor_ids) and len(velocities) == len(self.motor_ids):
+                self.current_positions = positions[:]
+                self.current_velocities = velocities[:]
+                return True
+            else:
+                # Fallback a valores anteriores si hay problemas de comunicación
+                self.node.get_logger().debug("Datos incompletos - usando valores anteriores")
+                return True
                 
-            return True
-            
         except Exception as e:
-            self.node.get_logger().warning(f"Error obteniendo estados motores: {e}")
-            return False
+            self.node.get_logger().debug(f"Error obteniendo estados motores: {e}")
+            # Mantener valores anteriores en caso de error
+            return True
 
     def send_positions(self):
         """Envía posiciones vía UDP con formato flexible según número de motores"""
@@ -599,6 +582,12 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         self.running = True
         self.communication_error_count = 0
         
+        # Usar hardware_manager mejorado en lugar de conexión directa Pybear
+        if self.hardware_manager:
+            self.node.get_logger().info("✅ Usando hardware_manager mejorado con patrones pd_control_node.py")
+        else:
+            self.node.get_logger().warning("⚠️ Hardware manager no disponible - modo simulación")
+        
         # Paso 1: Zero position como en código de referencia
         if not self.zero_position():
             self.node.get_logger().error("Error en zero_position")
@@ -672,8 +661,9 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             control_currents = self.calculate_control_currents()
             self.send_current_commands(control_currents)
             
-            # Reset contador de errores si llegamos aquí
-            self.communication_error_count = 0
+            # Reset contador de errores gradualmente si llegamos aquí sin problemas
+            if self.communication_error_count > 0:
+                self.communication_error_count = max(0, self.communication_error_count - 2)  # Reducir más rápido
             
         except KeyboardInterrupt:
             self.node.get_logger().info("Terminando comunicación...")
@@ -689,7 +679,8 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 self.running = False
                 return py_trees.common.Status.FAILURE
         
-        # Mantener máxima frecuencia (sin sleep adicional)
+        # SIN THROTTLE: Permitir que py_trees maneje la frecuencia naturalmente
+        # Igual que pd_control_node.py que funciona perfecto
         return py_trees.common.Status.RUNNING
 
     def restore_position_control(self):
