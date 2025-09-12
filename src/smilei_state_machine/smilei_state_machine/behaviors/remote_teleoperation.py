@@ -80,8 +80,8 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             # Declarar parámetros - configuración flexible para número de motores
             self.node.declare_parameter('remote_teleoperation.motor_ids', [1])  # Por defecto un motor
             self.node.declare_parameter('remote_teleoperation.is_machine_a', True)
-            self.node.declare_parameter('remote_teleoperation.machine_a_ip', '192.168.4.241')
-            self.node.declare_parameter('remote_teleoperation.machine_b_ip', '192.168.4.254')
+            self.node.declare_parameter('remote_teleoperation.machine_a_ip', '192.168.0.144')
+            self.node.declare_parameter('remote_teleoperation.machine_b_ip', '192.168.0.2')
             self.node.declare_parameter('remote_teleoperation.num_total_motors', 2)  # Total de motores en el sistema (A+B)
             
             # Cargar parámetros
