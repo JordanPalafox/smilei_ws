@@ -2,7 +2,6 @@ import time
 import rclpy
 from rclpy.node import Node
 import py_trees
-import threading
 from std_msgs.msg import String
 from smilei_state_machine.behaviors.home_position import HomePosition
 from smilei_state_machine.behaviors.zero_position import ZeroPosition
@@ -11,6 +10,7 @@ from smilei_state_machine.behaviors.say_hello import SayHello
 from smilei_state_machine.behaviors.local_teleoperation import LocalTeleoperation
 from smilei_state_machine.behaviors.remote_teleoperation import RemoteTeleoperation
 from smilei_state_machine.behaviors.disable_robot import DisableRobot
+from smilei_state_machine.hardware_manager import HardwareManager
 
 # Variable global para almacenar el comando actual
 current_state_command = "idle"
@@ -49,10 +49,13 @@ class StateMachineRoot(py_trees.behaviour.Behaviour):
                     import inspect
                     sig = inspect.signature(behavior.setup)
                     if len(sig.parameters) > 0 and 'timeout_sec' in sig.parameters:
-                        # Llamada con timeout explícito de 5.0 segundos
+                        # Llamada con timeout muy corto ya que usamos Pybear directamente
                         if self.node:
-                            self.node.get_logger().info(f"Configurando comportamiento {state_name} con timeout")
-                        behavior.setup(timeout_sec=5.0)
+                            self.node.get_logger().info(f"Configurando comportamiento {state_name} con Pybear")
+                        result = behavior.setup(timeout_sec=0.1)  # Timeout muy corto
+                        if not result:
+                            if self.node:
+                                self.node.get_logger().warning(f"Setup fallido para {state_name}, pero continuando...")
                     else:
                         # Llamada sin argumentos
                         if self.node:
@@ -60,11 +63,12 @@ class StateMachineRoot(py_trees.behaviour.Behaviour):
                         behavior.setup()
                 except Exception as e:
                     if self.node:
-                        self.node.get_logger().error(f"Error al configurar comportamiento {state_name}: {str(e)}")
+                        self.node.get_logger().warning(f"Error al configurar comportamiento {state_name}: {str(e)} - Continuando de todos modos...")
+                        # No fallar completamente, solo advertir
         
         self.behaviors_setup_done = True
         if self.node:
-            self.node.get_logger().info("Todos los comportamientos configurados")
+            self.node.get_logger().info("Configuración de comportamientos completada (con Pybear directo)")
     
     def initialise(self):
         global current_state_command, last_completed_state
@@ -133,18 +137,19 @@ class StateMachineRoot(py_trees.behaviour.Behaviour):
                 if self.node:
                     self.node.get_logger().error(f"Error al terminar comportamiento: {str(e)}")
 
-def state_command_callback(msg):
+def state_command_callback(msg, node):
     """Callback para recibir comandos de estado"""
     global current_state_command, last_completed_state
+    node.get_logger().info(f"📡 Callback recibido! Comando: {msg.data}, Estado actual: {current_state_command}")
     if current_state_command != msg.data:
-        print(f"Cambiando a estado: {msg.data}")
+        node.get_logger().info(f"🔄 Cambiando a estado: {msg.data}")
         current_state_command = msg.data
         # Reset último estado completado cuando cambiamos de comando
         last_completed_state = None
+    else:
+        node.get_logger().info(f"⚠️ Mismo estado solicitado: {msg.data}")
 
-def spin_ros(node):
-    """Funcion para ejecutar el spin de ROS en un hilo separado"""
-    rclpy.spin(node)
+# Función eliminada - ahora usamos spin_once en el loop principal
 
 def main():
     rclpy.init()
@@ -173,12 +178,12 @@ def main():
     state_command_sub = node.create_subscription(
         String,
         get_topic_name('state_command'),
-        state_command_callback,
+        lambda msg: state_command_callback(msg, node),
         10
     )
 
     # Define the motor IDs to control
-    motor_ids = [1]
+    motor_ids = [1,2]
 
     # Añadir estado idle para evitar advertencias
     node.get_logger().info(f"Iniciando la máquina de estados con motores: {motor_ids}")
@@ -186,44 +191,37 @@ def main():
     # Añadir una pausa para asegurar que ROS está inicializado
     time.sleep(2.0)
     
-    # Comprobar si los servicios están disponibles
-    try:
-        node.get_logger().info("Comprobando servicios disponibles...")
-        from rclpy.qos import QoSProfile
-        from rclpy.duration import Duration
-        
-        # Intentar obtener la lista de servicios disponibles
-        services = node.get_service_names_and_types()
-        
-        available_services = [s[0] for s in services]
-        node.get_logger().info(f"Servicios disponibles: {available_services}")
-        
-        # Advertir si faltan servicios importantes
-        expected_services = [
-            'westwood_motor/set_motor_id_and_target',
-            'westwood_motor/get_motor_positions',
-            'westwood_motor/get_available_motors',
-            'westwood_motor/set_position_gains',
-            'westwood_motor/set_mode',
-            'westwood_motor/set_torque_enable',
-            'westwood_motor/set_goal_iq'
-        ]
-        
-        for service in expected_services:
-            if get_topic_name(service) not in available_services:
-                node.get_logger().warn(f"Servicio esperado no disponible: {get_topic_name(service)}")
-    except Exception as e:
-        node.get_logger().error(f"Error al comprobar servicios: {str(e)}")
+    # Inicializar hardware manager robusto
+    node.get_logger().info("Inicializando hardware manager robusto...")
+    hardware_manager = HardwareManager(
+        node=node,
+        usb_ports=['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyUSB2', '/dev/ttyUSB3'],
+        baudrate=8000000,
+        auto_detect=True,
+        debug=False
+    )
 
-    # Crear comportamientos (pasando el nodo a cada uno)
-    idle = py_trees.behaviours.Running(name="IdleBehavior")  # Comportamiento simple para estado idle
-    enable = EnableRobot(name="EnableRobot", motor_ids=motor_ids, node=node, robot_name=robot_name)
-    home = HomePosition(name="GoHome", motor_ids=motor_ids, node=node, robot_name=robot_name)
-    zero = ZeroPosition(name="GoZero", motor_ids=motor_ids, node=node, robot_name=robot_name)
-    say_hello = SayHello(name="SayHello", motor_ids=motor_ids, node=node, robot_name=robot_name)
-    teleoperation = LocalTeleoperation(name="LocalTeleoperation", motor_ids=motor_ids, node=node, robot_name=robot_name)
-    remote_teleoperation = RemoteTeleoperation(name="RemoteTeleoperation", motor_ids=motor_ids, node=node, robot_name=robot_name)
-    disable = DisableRobot(name="DisableRobot", motor_ids=motor_ids, node=node, robot_name=robot_name)
+    # Crear comportamiento idle personalizado
+    class IdleBehavior(py_trees.behaviour.Behaviour):
+        def __init__(self, name="IdleBehavior"):
+            super().__init__(name)
+        def setup(self, timeout_sec=None, **kwargs):
+            return True
+        def initialise(self):
+            pass
+        def update(self):
+            return py_trees.common.Status.RUNNING
+        def terminate(self, new_status):
+            pass
+    
+    idle = IdleBehavior()  # Comportamiento simple para estado idle
+    enable = EnableRobot(name="EnableRobot", motor_ids=motor_ids, node=node, robot_name=robot_name, hardware_manager=hardware_manager)
+    home = HomePosition(name="GoHome", motor_ids=motor_ids, node=node, robot_name=robot_name, hardware_manager=hardware_manager)
+    zero = ZeroPosition(name="GoZero", motor_ids=motor_ids, node=node, robot_name=robot_name, hardware_manager=hardware_manager)
+    say_hello = SayHello(name="SayHello", motor_ids=motor_ids, node=node, robot_name=robot_name, hardware_manager=hardware_manager)
+    teleoperation = LocalTeleoperation(name="LocalTeleoperation", motor_ids=motor_ids, node=node, robot_name=robot_name, hardware_manager=hardware_manager)
+    remote_teleoperation = RemoteTeleoperation(name="RemoteTeleoperation", motor_ids=motor_ids, node=node, robot_name=robot_name, hardware_manager=hardware_manager)
+    disable = DisableRobot(name="DisableRobot", motor_ids=motor_ids, node=node, robot_name=robot_name, hardware_manager=hardware_manager)
 
     # Crear comportamiento raíz personalizado
     root = StateMachineRoot()
@@ -243,17 +241,18 @@ def main():
     tree = py_trees.trees.BehaviourTree(root)
     tree.setup()
 
-    # Iniciar spin de ROS en un hilo separado
-    spin_thread = threading.Thread(target=spin_ros, args=(node,))
-    spin_thread.daemon = True
-    spin_thread.start()
-
     node.get_logger().info("Starting state machine...")
     try:
         while rclpy.ok():
+            # Procesar callbacks de ROS primero
+            rclpy.spin_once(node, timeout_sec=0.001)
+            
+            # Luego ejecutar el árbol de comportamiento
             tree.tick()
             node.get_logger().debug(f"Estado actual: {current_state_command}, Completado: {last_completed_state}")
-            # Sin sleep - máxima frecuencia posible
+            
+            # Pequeña pausa para no saturar el CPU
+            time.sleep(0.001)
     except KeyboardInterrupt:
         pass
     finally:

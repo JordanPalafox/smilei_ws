@@ -1,64 +1,112 @@
 import py_trees
 import numpy as np
-import rclpy
-from westwood_motor_interfaces.srv import SetMotorIdAndTarget
+import time
 
 class ZeroPosition(py_trees.behaviour.Behaviour):
-    """Behaviour that sends all joints to zero position via ROS2 service"""
-    def __init__(self, name: str, motor_ids: list[int], node=None, robot_name: str = ""):
+    """Behaviour that moves all joints to zero position with gradual interpolation"""
+    def __init__(self, name: str, motor_ids: list[int], node=None, robot_name: str = "", hardware_manager=None):
         super().__init__(name)
         self.motor_ids = motor_ids
         self.node = node
         self.robot_name = robot_name
-        self.client = None
-        self.future = None
-        self.own_node = False
-
-    def _get_topic_name(self, topic_name):
-        if self.robot_name:
-            return f'/{self.robot_name}/{topic_name.lstrip("/")}'
-        return topic_name
+        self.hardware_manager = hardware_manager
+        self.available_motors = []
+        
+        # Movement parameters
+        self.num_steps = 100  # Same as original code
+        self.current_step = 0
+        self.target_positions = None
+        self.initial_positions = None
+        self.delta_angles = None
+        self.movement_completed = False
 
     def setup(self, timeout_sec=None, **kwargs) -> bool:
-        # Usar el nodo proporcionado en lugar de crear uno nuevo
-        if self.node is None:
-            self.node = rclpy.create_node('zero_position_client')
-            self.own_node = True
+        # Check hardware connection using hardware manager
+        if self.hardware_manager is not None:
+            available_motors = self.hardware_manager.get_available_motors()
+            self.available_motors = [m for m in self.motor_ids if m in available_motors]
+            if self.available_motors:
+                self.node.get_logger().info(f"Hardware conectado - motores disponibles: {self.available_motors}")
+                return True
+            else:
+                self.node.get_logger().warning("No hay motores disponibles")
+                return True  # Continue in simulation mode
         else:
-            self.own_node = False
-            
-        self.client = self.node.create_client(
-            SetMotorIdAndTarget,
-            self._get_topic_name('westwood_motor/set_motor_id_and_target')
-        )
-        
-        if timeout_sec is None:
-            timeout_sec = 1.0
-            
-        return self.client.wait_for_service(timeout_sec=timeout_sec)
+            self.node.get_logger().warning("Hardware manager no disponible - modo simulación")
+            return True  # Continue in simulation mode
 
     def initialise(self) -> None:
-        self.future = None
+        self.node.get_logger().info(f"Iniciando movimiento a posición cero")
+        
+        # Reset movement state
+        self.current_step = 0
+        self.movement_completed = False
+        
+        # Target positions are all zeros (same as original code)
+        self.target_positions = np.zeros(len(self.motor_ids))
+        
+        # Get current positions
+        if self.hardware_manager and self.hardware_manager.hardware_connected:
+            try:
+                current_pos = self.hardware_manager.get_present_position(*self.motor_ids)
+                self.initial_positions = np.array(current_pos)
+                self.node.get_logger().info(f"Posiciones actuales: {self.initial_positions}")
+                self.node.get_logger().info(f"Posiciones objetivo: {self.target_positions}")
+            except Exception as e:
+                self.node.get_logger().error(f"Error leyendo posiciones actuales: {e}")
+                self.initial_positions = np.zeros(len(self.motor_ids))
+        else:
+            # Simulation mode - assume starting from some position
+            self.initial_positions = np.array([0.5, 0.5] + [0.0] * (len(self.motor_ids) - 2))
+            self.node.get_logger().info("[SIM] Iniciando movimiento gradual a cero")
+        
+        # Calculate delta angles for interpolation
+        self.delta_angles = (self.target_positions - self.initial_positions) / self.num_steps
+        self.node.get_logger().info(f"Delta por paso: {self.delta_angles}")
 
     def update(self) -> py_trees.common.Status:
-        if self.future is None:
-            # Define zero positions for all 8 motors
-            zero_pos = np.zeros(len(self.motor_ids))
-            req = SetMotorIdAndTarget.Request()
-            req.motor_ids = self.motor_ids
-            req.target_positions = list(zero_pos)
-            self.future = self.client.call_async(req)
-            return py_trees.common.Status.RUNNING
+        if self.movement_completed:
+            return py_trees.common.Status.SUCCESS
         
-        if self.future.done():
-            result = self.future.result()
-            return (py_trees.common.Status.SUCCESS
-                    if result.success
-                    else py_trees.common.Status.FAILURE)
+        # Calculate current goal position
+        goal_positions = self.initial_positions + self.delta_angles * (self.current_step + 1)
+        
+        # Send positions to hardware
+        if self.hardware_manager:
+            try:
+                position_pairs = [(motor_id, pos) for motor_id, pos in zip(self.motor_ids, goal_positions)]
+                self.hardware_manager.set_goal_position(*position_pairs)
+                
+                # Read and display actual positions
+                actual_positions = self.hardware_manager.get_present_position(*self.motor_ids)
+                self.node.get_logger().info(f"Paso {self.current_step + 1}/{self.num_steps}: Objetivo={[f'{pos:.4f}' for pos in goal_positions]}, Real={[f'{pos:.4f}' for pos in actual_positions]}")
+                
+            except Exception as e:
+                self.node.get_logger().error(f"Error enviando posiciones: {e}")
+                return py_trees.common.Status.FAILURE
+        else:
+            self.node.get_logger().debug(f"[SIM] Paso {self.current_step + 1}/{self.num_steps}: {goal_positions}")
+        
+        # Wait same as original code
+        time.sleep(0.01)
+        
+        # Increment step
+        self.current_step += 1
+        
+        # Check if movement is complete
+        if self.current_step >= self.num_steps:
+            self.movement_completed = True
+            # Show final positions
+            if self.hardware_manager:
+                final_positions = self.hardware_manager.get_present_position(*self.motor_ids)
+                self.node.get_logger().info(f"Movimiento a ZERO completado. Posiciones finales: {[f'{pos:.4f}' for pos in final_positions]}")
+            return py_trees.common.Status.SUCCESS
+        
+        # Continue movement
         return py_trees.common.Status.RUNNING
 
     def terminate(self, new_status: py_trees.common.Status) -> None:
-        # Solo destruir el nodo si lo creamos nosotros mismos
-        if self.own_node and self.node:
-            self.node.destroy_node()
-            # No rclpy.shutdown() here
+        if new_status == py_trees.common.Status.SUCCESS:
+            self.node.get_logger().info("Zero position alcanzada exitosamente")
+        else:
+            self.node.get_logger().warning(f"Zero position terminado con estado: {new_status}")

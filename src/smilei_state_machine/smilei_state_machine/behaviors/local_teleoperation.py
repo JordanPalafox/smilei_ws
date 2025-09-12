@@ -3,13 +3,11 @@ import rclpy
 import time
 import sys
 import select
-from westwood_motor_interfaces.srv import SetMotorIdAndTarget, GetMotorPositions
-from westwood_motor_interfaces.srv import SetMode, SetTorqueEnable
 
 
 class LocalTeleoperation(py_trees.behaviour.Behaviour):
     """Comportamiento simplificado de teleoperación local para motores configurables"""
-    def __init__(self, name: str, motor_ids=None, node=None, robot_name: str = ""):
+    def __init__(self, name: str, motor_ids=None, node=None, robot_name: str = "", hardware_manager=None):
         super().__init__(name)
         self.motor_ids = motor_ids if motor_ids is not None else [1, 6]  # Motores configurables, por defecto [1, 6]
         self.node = node
@@ -17,11 +15,9 @@ class LocalTeleoperation(py_trees.behaviour.Behaviour):
         self.running = False
         self.own_node = False
         
-        # Clientes para servicios (solo necesitamos posición y configuración)
-        self.set_position_client = None
-        self.get_position_client = None
-        self.set_mode_client = None
-        self.set_torque_client = None
+        # Use hardware manager instead of direct Pybear
+        self.hardware_manager = hardware_manager
+        self.available_motors = []
         
         # No necesitamos parámetros de control PID - usamos control por posición directo
         
@@ -50,63 +46,30 @@ class LocalTeleoperation(py_trees.behaviour.Behaviour):
         else:
             self.own_node = False
         
-        # Crear clientes para los servicios
-        self.set_position_client = self.node.create_client(
-            SetMotorIdAndTarget,
-            self._get_topic_name('westwood_motor/set_motor_id_and_target')
-        )
-        
-        self.get_position_client = self.node.create_client(
-            GetMotorPositions,
-            self._get_topic_name('westwood_motor/get_motor_positions')
-        )
-        
-        
-        self.set_mode_client = self.node.create_client(
-            SetMode,
-            self._get_topic_name('westwood_motor/set_mode')
-        )
-        
-        self.set_torque_client = self.node.create_client(
-            SetTorqueEnable,
-            self._get_topic_name('westwood_motor/set_torque_enable')
-        )
-        
-        
-        if timeout_sec is None:
-            timeout_sec = 1.0
-        
-        # Intentar esperar por los servicios principales
-        if not self.set_position_client.wait_for_service(timeout_sec=timeout_sec):
-            self.node.get_logger().warning("Servicio set_motor_id_and_target no disponible, continuando en modo simulación")
-        
-        if not self.get_position_client.wait_for_service(timeout_sec=timeout_sec):
-            self.node.get_logger().warning("Servicio get_motor_positions no disponible, continuando en modo simulación")
+        # Check hardware connection using hardware manager
+        if self.hardware_manager is not None:
+            available_motors = self.hardware_manager.get_available_motors()
+            self.available_motors = [m for m in self.motor_ids if m in available_motors]
+            if self.available_motors:
+                self.node.get_logger().info(f"Hardware conectado - motores disponibles: {self.available_motors}")
+            else:
+                self.node.get_logger().warning("No hay motores disponibles")
+        else:
+            self.node.get_logger().warning("Hardware manager no disponible - modo simulación")
         
         return True  # Siempre retorna True para permitir que continúe
 
     def zero_position(self):
-        """Envía todos los motores a posición cero"""
+        """Envía todos los motores a posición cero usando hardware_manager"""
         self.node.get_logger().info("Enviando motores a posición cero")
         
-        # Crear solicitud para establecer posiciones a cero
-        req = SetMotorIdAndTarget.Request()
-        req.motor_ids = self.motor_ids
-        req.target_positions = [0.0] * len(self.motor_ids)
-        
-        # Llamar al servicio
         try:
-            future = self.set_position_client.call_async(req)
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
-            
-            if future.done():
-                result = future.result()
-                if not result.success:
-                    self.node.get_logger().warning(f"Error al establecer posición cero: {result.message}")
-                    return False
+            if self.hardware_manager:
+                # Send all motors to zero position
+                position_pairs = [(motor_id, 0.0) for motor_id in self.motor_ids]
+                self.hardware_manager.set_goal_position(*position_pairs)
             else:
-                self.node.get_logger().warning("Timeout al establecer posición cero")
-                return False
+                self.node.get_logger().debug("[SIM] Enviando motores a posición cero")
             
             # Esperar a que los motores lleguen a la posición
             time.sleep(2.0)
@@ -116,25 +79,18 @@ class LocalTeleoperation(py_trees.behaviour.Behaviour):
             return False
 
     def setup_position_control(self):
-        """Configura los motores para control de posición"""
+        """Configura los motores para control de posición usando hardware_manager"""
         self.node.get_logger().info(f"Configurando motores {self.motor_ids} para control de posición")
         
         try:
-            # Configurar modo posición (modo 2)
-            req_mode = SetMode.Request()
-            req_mode.motor_ids = self.motor_ids
-            req_mode.modes = [2] * len(self.motor_ids)  # Todos los motores en modo posición
-            
-            future = self.set_mode_client.call_async(req_mode)
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
-            
-            # Habilitar torque
-            req_torque = SetTorqueEnable.Request()
-            req_torque.motor_ids = self.motor_ids
-            req_torque.enable_torque = [True] * len(self.motor_ids)
-            
-            future = self.set_torque_client.call_async(req_torque)
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
+            if self.hardware_manager:
+                # Configurar modo posición (modo 2)
+                self.hardware_manager.set_mode(*[(motor_id, 2) for motor_id in self.motor_ids])
+                
+                # Habilitar torque
+                self.hardware_manager.set_torque_enable(*[(motor_id, 1) for motor_id in self.motor_ids])
+            else:
+                self.node.get_logger().debug("[SIM] Configurando motores para control de posición")
             
             return True
         except Exception as e:
@@ -143,24 +99,16 @@ class LocalTeleoperation(py_trees.behaviour.Behaviour):
 
 
     def get_motor_position(self, motor_id):
-        """Obtiene la posición actual de un motor con manejo de errores mejorado"""
-        req = GetMotorPositions.Request()
-        req.motor_ids = [motor_id]
-        
+        """Obtiene la posición actual de un motor usando hardware_manager"""
         try:
-            future = self.get_position_client.call_async(req)
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=0.1)  # Timeout más rápido
-            
-            if future.done():
-                result = future.result()
-                if result.success and len(result.positions) > 0:
-                    return result.positions[0]
-            
-            # En caso de timeout, mantener la última posición conocida
-            if motor_id in self.prev_positions and self.prev_positions[motor_id] is not None:
-                return self.prev_positions[motor_id]
-            
-            return 0.0
+            if self.hardware_manager:
+                position = self.hardware_manager.get_present_position(motor_id)[0][0][0]
+                return position
+            else:
+                # Simulation mode - return a stable position value
+                if motor_id in self.prev_positions and self.prev_positions[motor_id] is not None:
+                    return self.prev_positions[motor_id]
+                return 0.0
         except Exception as e:
             self.node.get_logger().debug(f"Error al obtener posición del motor {motor_id}: {str(e)}")
             # Retornar última posición conocida en caso de error
@@ -278,26 +226,14 @@ class LocalTeleoperation(py_trees.behaviour.Behaviour):
         if not significant_error:
             return True
         
-        # Crear solicitud para mover los seguidores a la posición del líder
+        # Enviar comandos de posición usando hardware_manager
         try:
-            req = SetMotorIdAndTarget.Request()
-            req.motor_ids = list(self.follower_motors)
-            req.target_positions = [leader_avg_position] * len(self.follower_motors)
-            
-            future = self.set_position_client.call_async(req)
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=0.05)  # Timeout rápido
-            
-            if future.done():
-                result = future.result()
-                if not result.success:
-                    self.node.get_logger().warning(f"Error al enviar posiciones: {result.message}")
-                    return False
+            if self.hardware_manager:
+                position_pairs = [(motor_id, leader_avg_position) for motor_id in self.follower_motors]
+                self.hardware_manager.set_goal_position(*position_pairs)
             else:
-                self.node.get_logger().warning("Timeout enviando posiciones")
-                return False
-            
+                self.node.get_logger().debug(f"[SIM] Enviando posiciones: {[(motor_id, leader_avg_position) for motor_id in self.follower_motors]}")
             return True
-                
         except Exception as e:
             self.node.get_logger().warning(f"Excepción enviando posiciones: {str(e)}")
             return False
@@ -305,27 +241,20 @@ class LocalTeleoperation(py_trees.behaviour.Behaviour):
 
 
     def restore_position_control(self):
-        """Restaura el control de posición de los motores"""
+        """Restaura el control de posición de los motores usando hardware_manager"""
         self.node.get_logger().info(f"Restaurando control de posición para motores {self.motor_ids}")
         
         try:
-            # Configurar modo posición (modo 2)
-            req_mode = SetMode.Request()
-            req_mode.motor_ids = self.motor_ids
-            req_mode.modes = [2] * len(self.motor_ids)  # Todos los motores en modo posición
-            
-            future = self.set_mode_client.call_async(req_mode)
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
-            
-            time.sleep(1.0)
-            
-            # Enviar a posición home (1.5707 rad ≈ 90 grados)
-            home_req = SetMotorIdAndTarget.Request()
-            home_req.motor_ids = self.motor_ids
-            home_req.target_positions = [1.5707] * len(self.motor_ids)
-            
-            future = self.set_position_client.call_async(home_req)
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
+            if self.hardware_manager:
+                # Configurar modo posición (modo 2)
+                self.hardware_manager.set_mode(*[(motor_id, 2) for motor_id in self.motor_ids])
+                
+                time.sleep(1.0)
+                
+                # Enviar a posición home (1.5707 rad ≈ 90 grados)
+                self.hardware_manager.set_goal_position(*[(motor_id, 1.5707) for motor_id in self.motor_ids])
+            else:
+                self.node.get_logger().debug("[SIM] Restaurando control de posición")
             
             return True
         except Exception as e:
