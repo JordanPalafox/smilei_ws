@@ -81,8 +81,8 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             # Declarar parámetros - configuración flexible para número de motores
             self.node.declare_parameter('remote_teleoperation.motor_ids', [1])  # Por defecto un motor
             self.node.declare_parameter('remote_teleoperation.is_machine_a', True)
-            self.node.declare_parameter('remote_teleoperation.machine_a_ip', '192.168.0.100')
-            self.node.declare_parameter('remote_teleoperation.machine_b_ip', '192.168.0.2')
+            self.node.declare_parameter('remote_teleoperation.machine_a_ip', '192.168.4.1')
+            self.node.declare_parameter('remote_teleoperation.machine_b_ip', '192.168.4.254')
             self.node.declare_parameter('remote_teleoperation.num_total_motors', 2)  # Total de motores en el sistema (A+B)
             
             # Cargar parámetros
@@ -112,8 +112,10 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.node.get_logger().info(f"Configuración: {len(self.motor_ids)} motor(es) local(es), {self.num_total_motors} total en sistema")
             
             # Inicializar arrays con tamaño correcto
-            self.current_positions = [0.0] * self.num_total_motors
-            self.current_velocities = [0.0] * self.num_total_motors  
+            # current_positions/velocities: solo para motores locales
+            self.current_positions = [0.0] * len(self.motor_ids)
+            self.current_velocities = [0.0] * len(self.motor_ids)
+            # target_positions: para todo el sistema (A+B)
             self.target_positions = [0.0] * self.num_total_motors
             
         except Exception as e:
@@ -145,7 +147,13 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.receive_socket.bind((self.local_ip, self.receive_port))
             self.receive_socket.settimeout(0.001)  # Timeout como en referencia
             
-            self.node.get_logger().info(f"UDP configurado - Local: {self.local_ip}:{self.receive_port}, Remoto: {self.local_addr}")
+            self.node.get_logger().info(f"=== UDP CONFIGURACIÓN ===")
+            self.node.get_logger().info(f"Máquina: {'A' if self.is_machine_a else 'B'}")
+            self.node.get_logger().info(f"Local IP: {self.local_ip}")
+            self.node.get_logger().info(f"Remoto IP: {self.remote_ip}")
+            self.node.get_logger().info(f"Puerto de recepción: {self.receive_port}")
+            self.node.get_logger().info(f"Enviando a: {self.local_addr}")
+            self.node.get_logger().info(f"Formato UDP: {self.num_total_motors} floats ({self.num_total_motors * 4} bytes)")
             return True
             
         except Exception as e:
@@ -269,6 +277,14 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             struct_ql = struct.pack(format_str, *positions_to_send)
             self.send_socket.sendto(struct_ql, self.local_addr)
             
+            # Log ocasional para debug
+            if not hasattr(self, '_send_count'):
+                self._send_count = 0
+            self._send_count += 1
+            if self._send_count % 100 == 0:
+                pos_str = ', '.join(f'{p:.3f}' for p in positions_to_send)
+                self.node.get_logger().info(f"UDP TX -> {self.local_addr}: [{pos_str}]")
+            
         except Exception as e:
             self.node.get_logger().warning(f"Error enviando posiciones: {e}")
 
@@ -281,13 +297,21 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             data, addr = self.receive_socket.recvfrom(1024)
             
             # Crear formato dinámico basado en número total de motores
-            format_str = f'<{self.num_total_motors}f'
+            format_str = f'{self.num_total_motors}f'
             
             # Desempaquetar datos recibidos
             struct_qr = struct.unpack(format_str, data)
             
             with self.data_lock:
                 self.received_data.append(struct_qr)
+                
+            # Log ocasional para debug
+            if not hasattr(self, '_recv_count'):
+                self._recv_count = 0
+            self._recv_count += 1
+            if self._recv_count % 100 == 0:
+                pos_str = ', '.join(f'{p:.3f}' for p in struct_qr)
+                self.node.get_logger().info(f"UDP RX <- {addr}: [{pos_str}]")
                 
         except socket.timeout:
             # Timeout normal - no hacer nada
