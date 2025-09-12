@@ -253,8 +253,14 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             
             # Llenar con posiciones reales de motores locales
             for i, motor_id in enumerate(self.motor_ids):
-                if i < len(self.current_positions) and motor_id <= self.num_total_motors:
-                    positions_to_send[motor_id - 1] = self.current_positions[i]  # motor_id es 1-indexado
+                if i < len(self.current_positions):
+                    # Para máquina A: posiciones van en índices 0,1,etc 
+                    # Para máquina B: posiciones van en índices 2,3,etc
+                    if self.is_machine_a:
+                        positions_to_send[i] = self.current_positions[i]
+                    else:
+                        if (i + 2) < len(positions_to_send):  # Offset para máquina B
+                            positions_to_send[i + 2] = self.current_positions[i]
             
             # Crear formato dinámico basado en número total de motores
             format_str = f'{self.num_total_motors}f'
@@ -324,8 +330,13 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 local_pos = self.current_positions[i]
                 local_vel = self.current_velocities[i]
                 
-                # Posición objetivo (remota) - usar índice basado en motor_id
-                target_pos = self.target_positions[motor_id - 1] if motor_id <= len(self.target_positions) else 0.0
+                # Posición objetivo (remota) - usar índice local para máquinas A/B
+                # Para máquina A (motores 1,2): usar i directamente
+                # Para máquina B (motores 3,4): usar i+2 para acceder al array global
+                if self.is_machine_a:
+                    target_pos = self.target_positions[i] if i < len(self.target_positions) else 0.0
+                else:
+                    target_pos = self.target_positions[i + 2] if (i + 2) < len(self.target_positions) else 0.0
                 
                 # Control PD simple: i = (-kp*(pos_local - pos_remoto) - kd*vel_local) / Kt
                 # Usar primera ganancia disponible como fallback
@@ -419,10 +430,15 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 self._current_log_count = 0
             self._current_log_count += 1
             
-            if self._current_log_count % 100 == 0:
+            if self._current_log_count % 50 == 0:
                 current_str = ', '.join(f'{c:.3f}' for c in currents)
                 motor_str = ', '.join(f'M{mid}' for mid in self.motor_ids)
-                self.node.get_logger().info(f"Corrientes [{motor_str}]: [{current_str}]")
+                local_str = ', '.join(f'{p:.3f}' for p in self.current_positions)
+                target_str = ', '.join(f'{p:.3f}' for p in self.target_positions)
+                self.node.get_logger().info(f"Debug teleoperation:")
+                self.node.get_logger().info(f"  Local pos: [{local_str}]")
+                self.node.get_logger().info(f"  Target pos: [{target_str}]")
+                self.node.get_logger().info(f"  Corrientes [{motor_str}]: [{current_str}]")
             
             return success
             

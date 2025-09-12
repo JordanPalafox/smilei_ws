@@ -401,7 +401,7 @@ class HardwareManager:
                 if commands['mode_pairs']:
                     manager.set_mode(*commands['mode_pairs'])
                 if commands['limit_pairs']:
-                    manager.set_limit_iq_max(*commands['limit_pairs'])
+                    manager.set_limit_i_max(*commands['limit_pairs'])
                     
                 self.node.get_logger().info(f"Modo posición configurado, límite iq_max={iq_max}")
                 

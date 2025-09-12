@@ -183,7 +183,7 @@ def main():
     )
 
     # Define the motor IDs to control
-    motor_ids = [1,2]
+    motor_ids = [1]
 
     # Añadir estado idle para evitar advertencias
     node.get_logger().info(f"Iniciando la máquina de estados con motores: {motor_ids}")
