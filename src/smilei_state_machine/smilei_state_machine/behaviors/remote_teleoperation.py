@@ -93,12 +93,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         if self.robot_name:
             return f'/{self.robot_name}/{topic_name.lstrip("/")}'
         return topic_name
-
-    def _get_topic_name(self, topic_name):
-        if self.robot_name:
-            return f'/{self.robot_name}/{topic_name.lstrip("/")}'
-        return topic_name
-
+    
     def setup(self, timeout_sec=None, **kwargs) -> bool:
         """Configurar el comportamiento"""
         if self.node is None:
