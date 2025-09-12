@@ -262,13 +262,12 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             # Llenar con posiciones reales de motores locales
             for i, motor_id in enumerate(self.motor_ids):
                 if i < len(self.current_positions):
-                    # Para máquina A: posiciones van en índices 0,1,etc 
-                    # Para máquina B: posiciones van en índices 2,3,etc
+                    # Para máquina A: motor en índice 0 del array UDP
+                    # Para máquina B: motor en índice 1 del array UDP
                     if self.is_machine_a:
-                        positions_to_send[i] = self.current_positions[i]
+                        positions_to_send[0] = self.current_positions[i]  # A siempre en índice 0
                     else:
-                        if (i + 2) < len(positions_to_send):  # Offset para máquina B
-                            positions_to_send[i + 2] = self.current_positions[i]
+                        positions_to_send[1] = self.current_positions[i]  # B siempre en índice 1
             
             # Crear formato dinámico basado en número total de motores
             format_str = f'{self.num_total_motors}f'
@@ -283,7 +282,8 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self._send_count += 1
             if self._send_count % 100 == 0:
                 pos_str = ', '.join(f'{p:.3f}' for p in positions_to_send)
-                self.node.get_logger().info(f"UDP TX -> {self.local_addr}: [{pos_str}]")
+                machine = 'A' if self.is_machine_a else 'B'
+                self.node.get_logger().info(f"UDP TX [{machine}] -> {self.local_addr}: [A:{positions_to_send[0]:.3f}, B:{positions_to_send[1]:.3f}]")
             
         except Exception as e:
             self.node.get_logger().warning(f"Error enviando posiciones: {e}")
@@ -310,8 +310,8 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 self._recv_count = 0
             self._recv_count += 1
             if self._recv_count % 100 == 0:
-                pos_str = ', '.join(f'{p:.3f}' for p in struct_qr)
-                self.node.get_logger().info(f"UDP RX <- {addr}: [{pos_str}]")
+                machine = 'A' if self.is_machine_a else 'B'
+                self.node.get_logger().info(f"UDP RX [{machine}] <- {addr}: [A:{struct_qr[0]:.3f}, B:{struct_qr[1]:.3f}]")
                 
         except socket.timeout:
             # Timeout normal - no hacer nada
@@ -354,13 +354,13 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 local_pos = self.current_positions[i]
                 local_vel = self.current_velocities[i]
                 
-                # Posición objetivo (remota) - usar índice local para máquinas A/B
-                # Para máquina A (motores 1,2): usar i directamente
-                # Para máquina B (motores 3,4): usar i+2 para acceder al array global
+                # Posición objetivo (remota) - leer desde el array global
+                # Para máquina A: leer posición de máquina B desde índice 1
+                # Para máquina B: leer posición de máquina A desde índice 0
                 if self.is_machine_a:
-                    target_pos = self.target_positions[i] if i < len(self.target_positions) else 0.0
+                    target_pos = self.target_positions[1] if len(self.target_positions) > 1 else 0.0  # A lee de B
                 else:
-                    target_pos = self.target_positions[i + 2] if (i + 2) < len(self.target_positions) else 0.0
+                    target_pos = self.target_positions[0] if len(self.target_positions) > 0 else 0.0  # B lee de A
                 
                 # Control PD simple: i = (-kp*(pos_local - pos_remoto) - kd*vel_local) / Kt
                 # Usar primera ganancia disponible como fallback
@@ -457,12 +457,11 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             if self._current_log_count % 50 == 0:
                 current_str = ', '.join(f'{c:.3f}' for c in currents)
                 motor_str = ', '.join(f'M{mid}' for mid in self.motor_ids)
-                local_str = ', '.join(f'{p:.3f}' for p in self.current_positions)
-                target_str = ', '.join(f'{p:.3f}' for p in self.target_positions)
-                self.node.get_logger().info(f"Debug teleoperation:")
-                self.node.get_logger().info(f"  Local pos: [{local_str}]")
-                self.node.get_logger().info(f"  Target pos: [{target_str}]")
-                self.node.get_logger().info(f"  Corrientes [{motor_str}]: [{current_str}]")
+                machine = 'A' if self.is_machine_a else 'B'
+                remote_machine = 'B' if self.is_machine_a else 'A'
+                local_pos = self.current_positions[0] if self.current_positions else 0.0
+                remote_pos = self.target_positions[1] if self.is_machine_a and len(self.target_positions) > 1 else (self.target_positions[0] if not self.is_machine_a and len(self.target_positions) > 0 else 0.0)
+                self.node.get_logger().info(f"Debug [{machine}]: Local={local_pos:.3f}, Remote[{remote_machine}]={remote_pos:.3f}, I={current_str}")
             
             return success
             
