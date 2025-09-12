@@ -142,9 +142,9 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.send_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.send_socket.settimeout(0.001)  # Timeout como en referencia
             
-            # Socket para recibir (cliente) - bind en puerto local
+            # Socket para recibir (cliente) - bind en puerto local (usar 0.0.0.0 para cualquier interfaz)
             self.receive_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.receive_socket.bind((self.local_ip, self.receive_port))
+            self.receive_socket.bind(('0.0.0.0', self.receive_port))
             self.receive_socket.settimeout(0.001)  # Timeout como en referencia
             
             self.node.get_logger().info(f"=== UDP CONFIGURACIÓN ===")
@@ -154,6 +154,17 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.node.get_logger().info(f"Puerto de recepción: {self.receive_port}")
             self.node.get_logger().info(f"Enviando a: {self.local_addr}")
             self.node.get_logger().info(f"Formato UDP: {self.num_total_motors} floats ({self.num_total_motors * 4} bytes)")
+            
+            # Test UDP binding
+            import socket
+            try:
+                test_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                test_socket.bind(('0.0.0.0', self.receive_port))
+                test_socket.close()
+                self.node.get_logger().info(f"✅ Puerto {self.receive_port} disponible para bind")
+            except Exception as e:
+                self.node.get_logger().error(f"❌ Error binding puerto {self.receive_port}: {e}")
+                
             return True
             
         except Exception as e:
@@ -314,8 +325,15 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 self.node.get_logger().info(f"UDP RX [{machine}] <- {addr}: [A:{struct_qr[0]:.3f}, B:{struct_qr[1]:.3f}]")
                 
         except socket.timeout:
-            # Timeout normal - no hacer nada
-            pass
+            # Timeout normal - no hacer nada, pero contar para debug
+            if not hasattr(self, '_timeout_count'):
+                self._timeout_count = 0
+            self._timeout_count += 1
+            
+            # Log ocasional de timeouts para debug
+            if self._timeout_count % 1000 == 0:
+                self.node.get_logger().debug(f"UDP RX timeouts: {self._timeout_count}")
+                
         except Exception as e:
             self.node.get_logger().warning(f"Error recibiendo posiciones: {e}")
 
