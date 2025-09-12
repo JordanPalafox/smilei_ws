@@ -444,6 +444,342 @@ class HardwareManager:
         
         return success
 
+    def set_p_gain_iq(self, *motor_gain_pairs):
+        """Establecer ganancia P para control iq usando IDs globales"""
+        if not self.hardware_connected:
+            for motor_id, gain in motor_gain_pairs:
+                self.node.get_logger().debug(f"[SIM] Motor {motor_id} P_gain_iq -> {gain}")
+            return True
+        
+        manager_commands = {}
+        for motor_id, gain in motor_gain_pairs:
+            manager, local_id = self.get_manager_for_motor(motor_id)
+            if manager is None or local_id is None:
+                self.node.get_logger().warning(f"Motor {motor_id} no disponible")
+                continue
+            
+            if manager not in manager_commands:
+                manager_commands[manager] = []
+            manager_commands[manager].append((local_id, gain))
+        
+        success = True
+        for manager, commands in manager_commands.items():
+            try:
+                manager.set_p_gain_iq(*commands)
+            except Exception as e:
+                self.node.get_logger().error(f"Error configurando P_gain_iq: {e}")
+                success = False
+        
+        return success
+
+    def set_i_gain_iq(self, *motor_gain_pairs):
+        """Establecer ganancia I para control iq usando IDs globales"""
+        if not self.hardware_connected:
+            for motor_id, gain in motor_gain_pairs:
+                self.node.get_logger().debug(f"[SIM] Motor {motor_id} I_gain_iq -> {gain}")
+            return True
+        
+        manager_commands = {}
+        for motor_id, gain in motor_gain_pairs:
+            manager, local_id = self.get_manager_for_motor(motor_id)
+            if manager is None or local_id is None:
+                self.node.get_logger().warning(f"Motor {motor_id} no disponible")
+                continue
+            
+            if manager not in manager_commands:
+                manager_commands[manager] = []
+            manager_commands[manager].append((local_id, gain))
+        
+        success = True
+        for manager, commands in manager_commands.items():
+            try:
+                manager.set_i_gain_iq(*commands)
+            except Exception as e:
+                self.node.get_logger().error(f"Error configurando I_gain_iq: {e}")
+                success = False
+        
+        return success
+
+    def set_d_gain_iq(self, *motor_gain_pairs):
+        """Establecer ganancia D para control iq usando IDs globales"""
+        if not self.hardware_connected:
+            for motor_id, gain in motor_gain_pairs:
+                self.node.get_logger().debug(f"[SIM] Motor {motor_id} D_gain_iq -> {gain}")
+            return True
+        
+        manager_commands = {}
+        for motor_id, gain in motor_gain_pairs:
+            manager, local_id = self.get_manager_for_motor(motor_id)
+            if manager is None or local_id is None:
+                self.node.get_logger().warning(f"Motor {motor_id} no disponible")
+                continue
+            
+            if manager not in manager_commands:
+                manager_commands[manager] = []
+            manager_commands[manager].append((local_id, gain))
+        
+        success = True
+        for manager, commands in manager_commands.items():
+            try:
+                manager.set_d_gain_iq(*commands)
+            except Exception as e:
+                self.node.get_logger().error(f"Error configurando D_gain_iq: {e}")
+                success = False
+        
+        return success
+
+    def set_p_gain_id(self, *motor_gain_pairs):
+        """Establecer ganancia P para control id usando IDs globales"""
+        if not self.hardware_connected:
+            for motor_id, gain in motor_gain_pairs:
+                self.node.get_logger().debug(f"[SIM] Motor {motor_id} P_gain_id -> {gain}")
+            return True
+        
+        manager_commands = {}
+        for motor_id, gain in motor_gain_pairs:
+            manager, local_id = self.get_manager_for_motor(motor_id)
+            if manager is None or local_id is None:
+                self.node.get_logger().warning(f"Motor {motor_id} no disponible")
+                continue
+            
+            if manager not in manager_commands:
+                manager_commands[manager] = []
+            manager_commands[manager].append((local_id, gain))
+        
+        success = True
+        for manager, commands in manager_commands.items():
+            try:
+                manager.set_p_gain_id(*commands)
+            except Exception as e:
+                self.node.get_logger().error(f"Error configurando P_gain_id: {e}")
+                success = False
+        
+        return success
+
+    def set_i_gain_id(self, *motor_gain_pairs):
+        """Establecer ganancia I para control id usando IDs globales"""
+        if not self.hardware_connected:
+            for motor_id, gain in motor_gain_pairs:
+                self.node.get_logger().debug(f"[SIM] Motor {motor_id} I_gain_id -> {gain}")
+            return True
+        
+        manager_commands = {}
+        for motor_id, gain in motor_gain_pairs:
+            manager, local_id = self.get_manager_for_motor(motor_id)
+            if manager is None or local_id is None:
+                self.node.get_logger().warning(f"Motor {motor_id} no disponible")
+                continue
+            
+            if manager not in manager_commands:
+                manager_commands[manager] = []
+            manager_commands[manager].append((local_id, gain))
+        
+        success = True
+        for manager, commands in manager_commands.items():
+            try:
+                manager.set_i_gain_id(*commands)
+            except Exception as e:
+                self.node.get_logger().error(f"Error configurando I_gain_id: {e}")
+                success = False
+        
+        return success
+
+    def set_d_gain_id(self, *motor_gain_pairs):
+        """Establecer ganancia D para control id usando IDs globales"""
+        if not self.hardware_connected:
+            for motor_id, gain in motor_gain_pairs:
+                self.node.get_logger().debug(f"[SIM] Motor {motor_id} D_gain_id -> {gain}")
+            return True
+        
+        manager_commands = {}
+        for motor_id, gain in motor_gain_pairs:
+            manager, local_id = self.get_manager_for_motor(motor_id)
+            if manager is None or local_id is None:
+                self.node.get_logger().warning(f"Motor {motor_id} no disponible")
+                continue
+            
+            if manager not in manager_commands:
+                manager_commands[manager] = []
+            manager_commands[manager].append((local_id, gain))
+        
+        success = True
+        for manager, commands in manager_commands.items():
+            try:
+                manager.set_d_gain_id(*commands)
+            except Exception as e:
+                self.node.get_logger().error(f"Error configurando D_gain_id: {e}")
+                success = False
+        
+        return success
+
+    def set_p_gain_position(self, *motor_gain_pairs):
+        """Establecer ganancia P para control de posición usando IDs globales"""
+        if not self.hardware_connected:
+            for motor_id, gain in motor_gain_pairs:
+                self.node.get_logger().debug(f"[SIM] Motor {motor_id} P_gain_position -> {gain}")
+            return True
+        
+        manager_commands = {}
+        for motor_id, gain in motor_gain_pairs:
+            manager, local_id = self.get_manager_for_motor(motor_id)
+            if manager is None or local_id is None:
+                self.node.get_logger().warning(f"Motor {motor_id} no disponible")
+                continue
+            
+            if manager not in manager_commands:
+                manager_commands[manager] = []
+            manager_commands[manager].append((local_id, gain))
+        
+        success = True
+        for manager, commands in manager_commands.items():
+            try:
+                manager.set_p_gain_position(*commands)
+            except Exception as e:
+                self.node.get_logger().error(f"Error configurando P_gain_position: {e}")
+                success = False
+        
+        return success
+
+    def set_i_gain_position(self, *motor_gain_pairs):
+        """Establecer ganancia I para control de posición usando IDs globales"""
+        if not self.hardware_connected:
+            for motor_id, gain in motor_gain_pairs:
+                self.node.get_logger().debug(f"[SIM] Motor {motor_id} I_gain_position -> {gain}")
+            return True
+        
+        manager_commands = {}
+        for motor_id, gain in motor_gain_pairs:
+            manager, local_id = self.get_manager_for_motor(motor_id)
+            if manager is None or local_id is None:
+                self.node.get_logger().warning(f"Motor {motor_id} no disponible")
+                continue
+            
+            if manager not in manager_commands:
+                manager_commands[manager] = []
+            manager_commands[manager].append((local_id, gain))
+        
+        success = True
+        for manager, commands in manager_commands.items():
+            try:
+                manager.set_i_gain_position(*commands)
+            except Exception as e:
+                self.node.get_logger().error(f"Error configurando I_gain_position: {e}")
+                success = False
+        
+        return success
+
+    def set_d_gain_position(self, *motor_gain_pairs):
+        """Establecer ganancia D para control de posición usando IDs globales"""
+        if not self.hardware_connected:
+            for motor_id, gain in motor_gain_pairs:
+                self.node.get_logger().debug(f"[SIM] Motor {motor_id} D_gain_position -> {gain}")
+            return True
+        
+        manager_commands = {}
+        for motor_id, gain in motor_gain_pairs:
+            manager, local_id = self.get_manager_for_motor(motor_id)
+            if manager is None or local_id is None:
+                self.node.get_logger().warning(f"Motor {motor_id} no disponible")
+                continue
+            
+            if manager not in manager_commands:
+                manager_commands[manager] = []
+            manager_commands[manager].append((local_id, gain))
+        
+        success = True
+        for manager, commands in manager_commands.items():
+            try:
+                manager.set_d_gain_position(*commands)
+            except Exception as e:
+                self.node.get_logger().error(f"Error configurando D_gain_position: {e}")
+                success = False
+        
+        return success
+
+    def set_p_gain_force(self, *motor_gain_pairs):
+        """Establecer ganancia P para control de fuerza usando IDs globales"""
+        if not self.hardware_connected:
+            for motor_id, gain in motor_gain_pairs:
+                self.node.get_logger().debug(f"[SIM] Motor {motor_id} P_gain_force -> {gain}")
+            return True
+        
+        manager_commands = {}
+        for motor_id, gain in motor_gain_pairs:
+            manager, local_id = self.get_manager_for_motor(motor_id)
+            if manager is None or local_id is None:
+                self.node.get_logger().warning(f"Motor {motor_id} no disponible")
+                continue
+            
+            if manager not in manager_commands:
+                manager_commands[manager] = []
+            manager_commands[manager].append((local_id, gain))
+        
+        success = True
+        for manager, commands in manager_commands.items():
+            try:
+                manager.set_p_gain_force(*commands)
+            except Exception as e:
+                self.node.get_logger().error(f"Error configurando P_gain_force: {e}")
+                success = False
+        
+        return success
+
+    def set_i_gain_force(self, *motor_gain_pairs):
+        """Establecer ganancia I para control de fuerza usando IDs globales"""
+        if not self.hardware_connected:
+            for motor_id, gain in motor_gain_pairs:
+                self.node.get_logger().debug(f"[SIM] Motor {motor_id} I_gain_force -> {gain}")
+            return True
+        
+        manager_commands = {}
+        for motor_id, gain in motor_gain_pairs:
+            manager, local_id = self.get_manager_for_motor(motor_id)
+            if manager is None or local_id is None:
+                self.node.get_logger().warning(f"Motor {motor_id} no disponible")
+                continue
+            
+            if manager not in manager_commands:
+                manager_commands[manager] = []
+            manager_commands[manager].append((local_id, gain))
+        
+        success = True
+        for manager, commands in manager_commands.items():
+            try:
+                manager.set_i_gain_force(*commands)
+            except Exception as e:
+                self.node.get_logger().error(f"Error configurando I_gain_force: {e}")
+                success = False
+        
+        return success
+
+    def set_d_gain_force(self, *motor_gain_pairs):
+        """Establecer ganancia D para control de fuerza usando IDs globales"""
+        if not self.hardware_connected:
+            for motor_id, gain in motor_gain_pairs:
+                self.node.get_logger().debug(f"[SIM] Motor {motor_id} D_gain_force -> {gain}")
+            return True
+        
+        manager_commands = {}
+        for motor_id, gain in motor_gain_pairs:
+            manager, local_id = self.get_manager_for_motor(motor_id)
+            if manager is None or local_id is None:
+                self.node.get_logger().warning(f"Motor {motor_id} no disponible")
+                continue
+            
+            if manager not in manager_commands:
+                manager_commands[manager] = []
+            manager_commands[manager].append((local_id, gain))
+        
+        success = True
+        for manager, commands in manager_commands.items():
+            try:
+                manager.set_d_gain_force(*commands)
+            except Exception as e:
+                self.node.get_logger().error(f"Error configurando D_gain_force: {e}")
+                success = False
+        
+        return success
+
     def close(self):
         """Cerrar todas las conexiones"""
         for manager in self.managers:

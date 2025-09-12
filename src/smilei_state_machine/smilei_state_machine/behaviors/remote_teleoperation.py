@@ -45,10 +45,29 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         self.received_data = []
         self.data_lock = threading.Lock()
         
-        # Ganancias de control (del código de referencia)
-        self.kp = [1.75, 1.75, 1.75, 1.75]  # Proporcional 
-        self.kd = [0.1, 0.1, 0.1, 0.1]      # Derivativo
+        # Ganancias de control PD - usando los valores del nodo PD que funciona
+        self.kp = 1.0        # Proportional gain (del pd_control_node.py)
+        self.kd = 0.1        # Damping gain (del pd_control_node.py)
+        
+        # Parámetros del control PD no lineal (del pd_control_node.py)
+        self.r1 = 0.4
+        self.r2 = 0.3
+        self.p1 = (2*self.r2 - self.r1) / self.r1
+        self.p2 = (2*self.r2 - self.r1) / self.r2
+        
+        # Estimador de velocidad (del pd_control_node.py)
+        self.Fc = 35         # Frequency cutoff
+        self.Tl = 0.002      # Loop frequency
+        
+        # Variables del estimador de velocidad
+        self.theta_estimators = []  # Se inicializa por motor
+        self.vel_estimators = []    # Se inicializa por motor
         self.Kt = 0.35                      # Constante de torque
+        
+        # Límites de seguridad
+        self.max_current = 5.0              # Límite máximo de corriente (A)
+        self.error_deadband = 0.05          # Zona muerta para errores pequeños (rad)
+        self.max_error = 1.57               # Error máximo permitido (π/2 rad)
         
         # Variables de estado de motores
         self.current_positions = [0.0] * 8
@@ -186,34 +205,57 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             return False
 
     def setup_current_control(self):
-        """Configura motores para control de corriente como en código de referencia"""
+        """Configuración de motores usando parámetros exactos del pd_control_node.py"""
         try:
             if not self.hardware_manager:
-                self.node.get_logger().info("[SIM] Configurando control de corriente")
+                self.node.get_logger().info("[SIM] Configurando control simple")
                 return True
             
-            self.node.get_logger().info("Configurando motores para control de corriente...")
+            if self.is_machine_a:
+                self.node.get_logger().info("Configurando MÁQUINA A: motores con corriente CERO (movimiento libre)")
+                # Máquina A: configurar motores para movimiento libre (corriente cero)
+                # Configurar PID gains para control de corriente (como pd_control_node.py)
+                for motor_id in self.motor_ids:
+                    # PID iq/id control (del pd_control_node.py líneas 98-103)
+                    self.hardware_manager.set_p_gain_iq((motor_id, 0.277))
+                    self.hardware_manager.set_i_gain_iq((motor_id, 0.061))
+                    self.hardware_manager.set_d_gain_iq((motor_id, 0))
+                    self.hardware_manager.set_p_gain_id((motor_id, 0.277))
+                    self.hardware_manager.set_i_gain_id((motor_id, 0.061))
+                    self.hardware_manager.set_d_gain_id((motor_id, 0))
+                    
+                    # Modo corriente (modo 0) como pd_control_node.py línea 116
+                    self.hardware_manager.set_mode((motor_id, 0))
+                    
+                    # Habilitar torque
+                    self.hardware_manager.set_torque_enable((motor_id, 1))
+                    
+                self.node.get_logger().info("Máquina A configurada - motores libres para teleoperar")
+                
+            else:
+                self.node.get_logger().info("Configurando MÁQUINA B: control PD activo")
+                # Máquina B: configurar para control PD activo
+                for motor_id in self.motor_ids:
+                    # PID gains exactos del pd_control_node.py
+                    self.hardware_manager.set_p_gain_iq((motor_id, 0.277))
+                    self.hardware_manager.set_i_gain_iq((motor_id, 0.061))
+                    self.hardware_manager.set_d_gain_iq((motor_id, 0))
+                    self.hardware_manager.set_p_gain_id((motor_id, 0.277))
+                    self.hardware_manager.set_i_gain_id((motor_id, 0.061))
+                    self.hardware_manager.set_d_gain_id((motor_id, 0))
+                    
+                    # Modo corriente (modo 0) como pd_control_node.py
+                    self.hardware_manager.set_mode((motor_id, 0))
+                    
+                    # Habilitar torque  
+                    self.hardware_manager.set_torque_enable((motor_id, 1))
+                
+                self.node.get_logger().info("Máquina B configurada - control PD activo")
             
-            # PID para control de corriente id/iq (del código de referencia)
-            # P=0.277, I=0.061, D=0 para todos los motores
-            
-            # Configurar PID gains para corriente - simulamos con el hardware_manager existente
-            # En el código original se usan set_p_gain_iq, set_i_gain_iq, etc.
-            # Como no tenemos acceso directo, usamos lo que tenemos disponible
-            
-            # PID posición a cero (importante del código de referencia)
-            if hasattr(self.hardware_manager, 'configure_pid_gains'):
-                self.hardware_manager.configure_pid_gains(self.motor_ids, p_gain=0.0, i_gain=0.0, d_gain=0.0)
-            
-            # Modo corriente (modo 0) y habilitar torque
-            self.hardware_manager.set_mode(*[(motor_id, 0) for motor_id in self.motor_ids])
-            self.hardware_manager.set_torque_enable(*[(motor_id, 1) for motor_id in self.motor_ids])
-            
-            self.node.get_logger().info("Motores configurados para control de corriente")
             return True
             
         except Exception as e:
-            self.node.get_logger().error(f"Error configurando control de corriente: {str(e)}")
+            self.node.get_logger().error(f"Error configurando motor: {str(e)}")
             return False
 
     def get_motor_states(self):
@@ -366,42 +408,59 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             return True
 
     def calculate_control_currents(self):
-        """Calcula corrientes con número flexible de motores"""
+        """Calcula corrientes de control usando algoritmo PD exacto del pd_control_node.py"""
         try:
             currents = []
             
-            # Calcular corriente para cada motor local disponible
+            # Para cada motor local
             for i, motor_id in enumerate(self.motor_ids):
-                if i >= len(self.current_positions) or i >= len(self.current_velocities):
-                    currents.append(0.0)
-                    continue
-                
-                # Posición y velocidad locales
-                local_pos = self.current_positions[i]
-                local_vel = self.current_velocities[i]
-                
-                # Posición objetivo (remota) - leer desde el array global
-                # Para máquina A: leer posición de máquina B desde índice 1
-                # Para máquina B: leer posición de máquina A desde índice 0
                 if self.is_machine_a:
-                    target_pos = self.target_positions[1] if len(self.target_positions) > 1 else 0.0  # A lee de B
+                    # Máquina A: corriente cero para movimiento libre
+                    currents.append(0.0)
                 else:
-                    target_pos = self.target_positions[0] if len(self.target_positions) > 0 else 0.0  # B lee de A
-                
-                # Control PD simple: i = (-kp*(pos_local - pos_remoto) - kd*vel_local) / Kt
-                # Usar primera ganancia disponible como fallback
-                kp = self.kp[0] if self.kp else 1.75
-                kd = self.kd[0] if self.kd else 0.1
-                
-                # Calcular corriente de control
-                error = local_pos - target_pos
-                current = (-kp * error - kd * local_vel) / self.Kt
-                currents.append(current)
+                    # Máquina B: usar PD control exacto del pd_control_node.py
+                    # Obtener target desde datos UDP (posición de máquina A)
+                    target_pos = 0.0  # Default
+                    if len(self.target_positions) > 0:
+                        # Target es la posición de A (índice 0 en array UDP)
+                        target_pos = self.target_positions[0] if len(self.target_positions) > 0 else 0.0
+                    
+                    current_pos = self.current_positions[i] if i < len(self.current_positions) else 0.0
+                    
+                    # Error de posición (pd_control_node.py líneas 132-133)
+                    error = current_pos - target_pos
+                    
+                    # Estimador de velocidad (pd_control_node.py líneas 135-140)
+                    if i < len(self.vel_estimators):
+                        self.vel_estimators[i] = self.Fc * (self.theta_estimators[i] + current_pos)
+                        self.theta_estimators[i] = self.theta_estimators[i] - self.Tl * self.vel_estimators[i]
+                        vel_estimate = self.vel_estimators[i]
+                    else:
+                        vel_estimate = 0.0
+                    
+                    # Control PD no lineal exacto (pd_control_node.py líneas 143-144)
+                    tau = -self.kp * ((abs(error)**self.p1) * np.sign(error)) - self.kd * vel_estimate
+                    
+                    # Convertir torque a corriente (pd_control_node.py líneas 147-148)
+                    current = tau / self.Kt
+                    
+                    # Límites de seguridad
+                    current = max(-self.max_current, min(self.max_current, current))
+                    
+                    currents.append(current)
+                    
+                    # Debug cada 100 iteraciones
+                    if i == 0 and hasattr(self, '_debug_counter'):
+                        self._debug_counter += 1
+                        if self._debug_counter % 100 == 0:
+                            self.node.get_logger().info(f"🎯 PD Control: pos={current_pos:.3f}, target={target_pos:.3f}, error={error:.3f}, current={current:.3f}A")
+                    elif i == 0:
+                        self._debug_counter = 1
             
             return currents
             
         except Exception as e:
-            self.node.get_logger().error(f"Error calculando corrientes: {e}")
+            self.node.get_logger().error(f"Error calculando corrientes PD: {e}")
             return [0.0] * len(self.motor_ids)
 
     def right_gravity_vector(self, q):
@@ -487,12 +546,51 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 remote_machine = 'B' if self.is_machine_a else 'A'
                 local_pos = self.current_positions[0] if self.current_positions else 0.0
                 remote_pos = self.target_positions[1] if self.is_machine_a and len(self.target_positions) > 1 else (self.target_positions[0] if not self.is_machine_a and len(self.target_positions) > 0 else 0.0)
-                self.node.get_logger().info(f"Debug [{machine}]: Local={local_pos:.3f}, Remote[{remote_machine}]={remote_pos:.3f}, I={current_str}")
+                error = local_pos - remote_pos
+                # Normalizar error para mostrar
+                while error > 3.14159:
+                    error -= 2 * 3.14159
+                while error < -3.14159:
+                    error += 2 * 3.14159
+                self.node.get_logger().info(f"Debug [{machine}]: Local={local_pos:.3f}, Remote[{remote_machine}]={remote_pos:.3f}, Error={error:.3f}, I={current_str}")
             
             return success
             
         except Exception as e:
             self.node.get_logger().error(f"Error enviando corrientes: {e}")
+            return False
+    
+    def send_position_commands(self, positions):
+        """Envía comandos de POSICIÓN (mucho más estable que corriente)"""
+        try:
+            if not self.hardware_manager:
+                # Modo simulación
+                return True
+            
+            # Crear pares de (motor_id, position) para motores locales disponibles
+            position_pairs = []
+            for i, motor_id in enumerate(self.motor_ids):
+                position = positions[i] if i < len(positions) else 0.0
+                position_pairs.append((motor_id, position))
+            
+            # Enviar posiciones usando hardware_manager (modo posición)
+            success = self.hardware_manager.set_goal_position(*position_pairs)
+            
+            # Log cada cierto tiempo para debugging
+            if not hasattr(self, '_position_log_count'):
+                self._position_log_count = 0
+            self._position_log_count += 1
+            
+            if self._position_log_count % 200 == 0:  # Menos frecuente que corrientes
+                position_str = ', '.join(f'{p:.3f}' for p in positions)
+                motor_str = ', '.join(f'M{mid}' for mid in self.motor_ids)
+                machine = 'A' if self.is_machine_a else 'B'
+                self.node.get_logger().info(f"🎯 Posición [{machine}]: {motor_str}={position_str}")
+            
+            return success
+            
+        except Exception as e:
+            self.node.get_logger().error(f"Error enviando posiciones: {e}")
             return False
 
     def initialise(self) -> None:
@@ -528,6 +626,10 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         
         # Inicializar posiciones objetivo con tamaño del sistema total
         self.target_positions = [0.0] * self.num_total_motors
+        
+        # Inicializar estimadores de velocidad (del pd_control_node.py)
+        self.theta_estimators = [0.0] * len(self.motor_ids)
+        self.vel_estimators = [0.0] * len(self.motor_ids)
         
         self.node.get_logger().info(f"Teleoperación iniciada - Máquina {'A' if self.is_machine_a else 'B'}")
         self.node.get_logger().info(f"Local: {self.local_ip}:{self.receive_port} -> Remoto: {self.local_addr}")
@@ -566,9 +668,9 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             send_thread.join()
             receive_thread.join()
             
-            # Paso 4: Calcular y enviar corrientes de control
-            currents = self.calculate_control_currents()
-            self.send_current_commands(currents)
+            # Paso 4: Calcular y enviar corrientes PD (como pd_control_node.py)
+            control_currents = self.calculate_control_currents()
+            self.send_current_commands(control_currents)
             
             # Reset contador de errores si llegamos aquí
             self.communication_error_count = 0
