@@ -155,7 +155,6 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.node.get_logger().info(f"Formato UDP: {self.num_total_motors} floats ({self.num_total_motors * 4} bytes)")
             
             # Test UDP binding
-            import socket
             try:
                 test_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 test_socket.bind(('0.0.0.0', self.receive_port))
