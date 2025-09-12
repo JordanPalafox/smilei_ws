@@ -96,16 +96,16 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 # Máquina A configuración
                 self.local_ip = self.machine_a_ip
                 self.remote_ip = self.machine_b_ip
-                self.send_port = 4000    # A envía a puerto 4000 de B  
+                self.send_port = 4000    # Puerto usado para enviar (no importa mucho)
                 self.receive_port = 5005 # A recibe en puerto 5005
-                self.local_addr = (self.remote_ip, 5005)  # Dirección a donde A envía
+                self.local_addr = (self.remote_ip, 4000)  # A envía a puerto 4000 de B
             else:
                 # Máquina B configuración  
                 self.local_ip = self.machine_b_ip
                 self.remote_ip = self.machine_a_ip
-                self.send_port = 5005    # B envía a puerto 5005 de A
+                self.send_port = 5005    # Puerto usado para enviar (no importa mucho)
                 self.receive_port = 4000 # B recibe en puerto 4000
-                self.local_addr = (self.remote_ip, 4000)  # Dirección a donde B envía
+                self.local_addr = (self.remote_ip, 5005)  # B envía a puerto 5005 de A
             
             # Inicializar variables de control basadas en número total de motores
             self.node.get_logger().info(f"Configuración: {len(self.motor_ids)} motor(es) local(es), {self.num_total_motors} total en sistema")
@@ -139,12 +139,21 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         try:
             # Socket para enviar (servidor) - no requiere bind específico
             self.send_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.send_socket.settimeout(0.001)  # Timeout como en referencia
+            # Para máquina A, usar timeout más largo debido a problemas de red
+            send_timeout = 0.5 if self.is_machine_a else 0.1
+            self.send_socket.settimeout(send_timeout)  # Timeout ajustado por máquina
             
             # Socket para recibir (cliente) - bind en puerto local (usar 0.0.0.0 para cualquier interfaz)
             self.receive_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            # Configurar opciones de socket para permitir reutilización
+            self.receive_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                self.receive_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            except AttributeError:
+                # SO_REUSEPORT no disponible en todos los sistemas
+                pass
             self.receive_socket.bind(('0.0.0.0', self.receive_port))
-            self.receive_socket.settimeout(0.001)  # Timeout como en referencia
+            self.receive_socket.settimeout(0.01)  # Timeout para recepción UDP
             
             self.node.get_logger().info(f"=== UDP CONFIGURACIÓN ===")
             self.node.get_logger().info(f"Máquina: {'A' if self.is_machine_a else 'B'}")
@@ -153,15 +162,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.node.get_logger().info(f"Puerto de recepción: {self.receive_port}")
             self.node.get_logger().info(f"Enviando a: {self.local_addr}")
             self.node.get_logger().info(f"Formato UDP: {self.num_total_motors} floats ({self.num_total_motors * 4} bytes)")
-            
-            # Test UDP binding
-            try:
-                test_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                test_socket.bind(('0.0.0.0', self.receive_port))
-                test_socket.close()
-                self.node.get_logger().info(f"✅ Puerto {self.receive_port} disponible para bind")
-            except Exception as e:
-                self.node.get_logger().error(f"❌ Error binding puerto {self.receive_port}: {e}")
+            self.node.get_logger().info(f"✅ Puerto {self.receive_port} bound exitosamente")
                 
             return True
             
@@ -294,6 +295,15 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 machine = 'A' if self.is_machine_a else 'B'
                 self.node.get_logger().info(f"UDP TX [{machine}] -> {self.local_addr}: [A:{positions_to_send[0]:.3f}, B:{positions_to_send[1]:.3f}]")
             
+        except socket.timeout:
+            # Para máquina A con problemas de timeout, contar silenciosamente
+            if not hasattr(self, '_timeout_fallback_count'):
+                self._timeout_fallback_count = 0
+            self._timeout_fallback_count += 1
+            
+            if self._timeout_fallback_count % 100 == 0:
+                self.node.get_logger().warning(f"UDP timeout count: {self._timeout_fallback_count}")
+                
         except Exception as e:
             self.node.get_logger().warning(f"Error enviando posiciones: {e}")
 
@@ -617,9 +627,11 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         try:
             if self.send_socket:
                 self.send_socket.close()
+                self.send_socket = None
             if self.receive_socket:
                 self.receive_socket.close()
-            self.node.get_logger().info("Sockets UDP cerrados")
+                self.receive_socket = None
+            self.node.get_logger().info("Sockets UDP cerrados correctamente")
         except Exception as e:
             self.node.get_logger().warning(f"Error cerrando sockets: {e}")
         

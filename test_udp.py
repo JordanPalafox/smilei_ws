@@ -58,7 +58,7 @@ if __name__ == "__main__":
         print("  python3 test_udp.py receive 5005")
         print()
         print("Ejemplo máquina B:")
-        print("  python3 test_udp.py send 192.168.4.1 5005")
+        print("  python3 test_udp.py send 192.168.4.241 5005")
         print("  python3 test_udp.py receive 4000")
         sys.exit(1)
     
