@@ -1,5 +1,8 @@
 westwood_motor_server:
   ros__parameters:
+    # Namespace for the node and its services
+    __ns: /operador
+
     # USB port configuration
     usb_ports: ['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyUSB2', '/dev/ttyUSB3']
     baudrate: 8000000

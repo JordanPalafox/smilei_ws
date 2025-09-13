@@ -9,11 +9,10 @@ from westwood_motor_interfaces.srv import SetMode, SetTorqueEnable
 
 class LocalTeleoperation(py_trees.behaviour.Behaviour):
     """Comportamiento simplificado de teleoperación local para motores configurables"""
-    def __init__(self, name: str, motor_ids=None, node=None, robot_name: str = ""):
+    def __init__(self, name: str, motor_ids=None, node=None):
         super().__init__(name)
         self.motor_ids = motor_ids if motor_ids is not None else [1, 6]  # Motores configurables, por defecto [1, 6]
         self.node = node
-        self.robot_name = robot_name
         self.running = False
         self.own_node = False
         
@@ -37,11 +36,6 @@ class LocalTeleoperation(py_trees.behaviour.Behaviour):
         self.communication_error_count = 0
         self.max_communication_errors = 10  # Máximo número de errores antes de salir
 
-    def _get_topic_name(self, topic_name):
-        if self.robot_name:
-            return f'/{self.robot_name}/{topic_name.lstrip("/")}'
-        return topic_name
-
     def setup(self, timeout_sec=None, **kwargs) -> bool:
         # Usar el nodo proporcionado en lugar de crear uno nuevo
         if self.node is None:
@@ -53,23 +47,23 @@ class LocalTeleoperation(py_trees.behaviour.Behaviour):
         # Crear clientes para los servicios
         self.set_position_client = self.node.create_client(
             SetMotorIdAndTarget,
-            self._get_topic_name('westwood_motor/set_motor_id_and_target')
+            'westwood_motor/set_motor_id_and_target'
         )
         
         self.get_position_client = self.node.create_client(
             GetMotorPositions,
-            self._get_topic_name('westwood_motor/get_motor_positions')
+            'westwood_motor/get_motor_positions'
         )
         
         
         self.set_mode_client = self.node.create_client(
             SetMode,
-            self._get_topic_name('westwood_motor/set_mode')
+            'westwood_motor/set_mode'
         )
         
         self.set_torque_client = self.node.create_client(
             SetTorqueEnable,
-            self._get_topic_name('westwood_motor/set_torque_enable')
+            'westwood_motor/set_torque_enable'
         )
         
         

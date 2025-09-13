@@ -149,30 +149,14 @@ def spin_ros(node):
 def main():
     rclpy.init()
     
-    # Temporary node to get robot_name
-    temp_node = rclpy.create_node('temp_state_machine_parser')
-    temp_node.declare_parameter('robot_name', '')
-    robot_name = temp_node.get_parameter('robot_name').value
-    temp_node.destroy_node()
+    # El nombre del nodo y el namespace se establecen en el launch file.
+    node = Node('state_machine')
 
-    node_name = 'state_machine_node'
-    if robot_name:
-        node_name = f'{robot_name}_{node_name}'
-
-    node = Node(node_name)
-
-    node.declare_parameter('robot_name', '')
-    robot_name = node.get_parameter('robot_name').value
-
-    def get_topic_name(topic_name):
-        if robot_name:
-            return f'/{robot_name}/{topic_name.lstrip("/")}'
-        return topic_name
-
-    # Crear suscriptor para recibir comandos de estado
+    # Crear suscriptor para recibir comandos de estado. 
+    # El nombre es relativo al namespace del nodo.
     state_command_sub = node.create_subscription(
         String,
-        get_topic_name('state_command'),
+        'state_command',
         state_command_callback,
         10
     )
@@ -180,50 +164,20 @@ def main():
     # Define the motor IDs to control
     motor_ids = [1]
 
-    # Añadir estado idle para evitar advertencias
     node.get_logger().info(f"Iniciando la máquina de estados con motores: {motor_ids}")
     
     # Añadir una pausa para asegurar que ROS está inicializado
     time.sleep(2.0)
-    
-    # Comprobar si los servicios están disponibles
-    try:
-        node.get_logger().info("Comprobando servicios disponibles...")
-        from rclpy.qos import QoSProfile
-        from rclpy.duration import Duration
-        
-        # Intentar obtener la lista de servicios disponibles
-        services = node.get_service_names_and_types()
-        
-        available_services = [s[0] for s in services]
-        node.get_logger().info(f"Servicios disponibles: {available_services}")
-        
-        # Advertir si faltan servicios importantes
-        expected_services = [
-            'westwood_motor/set_motor_id_and_target',
-            'westwood_motor/get_motor_positions',
-            'westwood_motor/get_available_motors',
-            'westwood_motor/set_position_gains',
-            'westwood_motor/set_mode',
-            'westwood_motor/set_torque_enable',
-            'westwood_motor/set_goal_iq'
-        ]
-        
-        for service in expected_services:
-            if get_topic_name(service) not in available_services:
-                node.get_logger().warn(f"Servicio esperado no disponible: {get_topic_name(service)}")
-    except Exception as e:
-        node.get_logger().error(f"Error al comprobar servicios: {str(e)}")
 
     # Crear comportamientos (pasando el nodo a cada uno)
-    idle = py_trees.behaviours.Running(name="IdleBehavior")  # Comportamiento simple para estado idle
-    enable = EnableRobot(name="EnableRobot", motor_ids=motor_ids, node=node, robot_name=robot_name)
-    home = HomePosition(name="GoHome", motor_ids=motor_ids, node=node, robot_name=robot_name)
-    zero = ZeroPosition(name="GoZero", motor_ids=motor_ids, node=node, robot_name=robot_name)
-    say_hello = SayHello(name="SayHello", motor_ids=motor_ids, node=node, robot_name=robot_name)
-    teleoperation = LocalTeleoperation(name="LocalTeleoperation", motor_ids=motor_ids, node=node, robot_name=robot_name)
-    remote_teleoperation = RemoteTeleoperation(name="RemoteTeleoperation", motor_ids=motor_ids, node=node, robot_name=robot_name)
-    disable = DisableRobot(name="DisableRobot", motor_ids=motor_ids, node=node, robot_name=robot_name)
+    idle = py_trees.behaviours.Running(name="IdleBehavior")
+    enable = EnableRobot(name="EnableRobot", motor_ids=motor_ids, node=node)
+    home = HomePosition(name="GoHome", motor_ids=motor_ids, node=node)
+    zero = ZeroPosition(name="GoZero", motor_ids=motor_ids, node=node)
+    say_hello = SayHello(name="SayHello", motor_ids=motor_ids, node=node)
+    teleoperation = LocalTeleoperation(name="LocalTeleoperation", motor_ids=motor_ids, node=node)
+    remote_teleoperation = RemoteTeleoperation(name="RemoteTeleoperation", motor_ids=motor_ids, node=node)
+    disable = DisableRobot(name="DisableRobot", motor_ids=motor_ids, node=node)
 
     # Crear comportamiento raíz personalizado
     root = StateMachineRoot()
@@ -258,9 +212,7 @@ def main():
         pass
     finally:
         node.get_logger().info("Shutting down state machine")
-        # No destruir el nodo aquí, se hará después de salir del bucle
         rclpy.shutdown()
-        # Ahora podemos destruir el nodo con seguridad
         node.destroy_node()
 
 if __name__ == '__main__':

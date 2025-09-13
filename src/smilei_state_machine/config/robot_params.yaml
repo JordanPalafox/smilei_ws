@@ -1,6 +1,10 @@
 # Archivo de configuración para los parámetros del robot SMILEi
-smilei_state_machine:
+state_machine:
   ros__parameters:
+
+    # Namespace para el nodo y sus tópicos/servicios
+    __ns: /seguidor
+
     use_sim_time: false
     
     # Límites de las articulaciones (en radianes)
@@ -70,7 +74,7 @@ smilei_state_machine:
 # Configuración global para todos los nodos del proceso
 /**:
   ros__parameters:
-    robot_name: 'operador'  # Nombre del robot
+    
     
     # Configuración para teleoperación remota
     remote_teleoperation:

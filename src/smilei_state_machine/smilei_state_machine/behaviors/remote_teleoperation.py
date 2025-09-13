@@ -21,10 +21,10 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
     
     Basado en el código original de teleoperación remota de main.py
     """
-    def __init__(self, name: str, motor_ids=None, node=None, robot_name: str = ""):
+    def __init__(self, name: str, motor_ids=None, node=None, is_machine_a: bool = True):
         super().__init__(name)
         self.node = node
-        self.robot_name = robot_name
+        self.is_machine_a = is_machine_a
         self.running = False
         self.own_node = False
         
@@ -89,11 +89,6 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         self.Tl = 0.002  # Tiempo del loop principal
         self.last_time = None  # Para calcular dt real
 
-    def _get_topic_name(self, topic_name):
-        if self.robot_name:
-            return f'/{self.robot_name}/{topic_name.lstrip("/")}'
-        return topic_name
-    
     def setup(self, timeout_sec=None, **kwargs) -> bool:
         """Configurar el comportamiento"""
         if self.node is None:
@@ -106,7 +101,6 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         try:
             # Declarar parámetros de teleoperación remota
             self.node.declare_parameter('remote_teleoperation.motor_ids', [1])
-            self.node.declare_parameter('remote_teleoperation.is_machine_a', True)
             self.node.declare_parameter('remote_teleoperation.machine_a_ip', '192.168.4.241')
             self.node.declare_parameter('remote_teleoperation.machine_b_ip', '192.168.4.238')
             self.node.declare_parameter('remote_teleoperation.socket_timeout', 0.001)
@@ -120,8 +114,6 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             
             # Cargar valores de parámetros
             self.motor_ids = self.node.get_parameter('remote_teleoperation.motor_ids').value
-            self.is_machine_a = self.node.get_parameter('remote_teleoperation.is_machine_a').value
-            is_machine_a = self.is_machine_a
             machine_a_ip = self.node.get_parameter('remote_teleoperation.machine_a_ip').value
             machine_b_ip = self.node.get_parameter('remote_teleoperation.machine_b_ip').value
             self.socket_timeout = self.node.get_parameter('remote_teleoperation.socket_timeout').value
@@ -135,7 +127,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             
             
             # Configurar IPs y puertos basado en qué máquina somos
-            if is_machine_a:
+            if self.is_machine_a:
                 self.local_ip = machine_a_ip
                 self.remote_ip = machine_b_ip
                 self.send_port = 4000      # Máquina A envía al puerto 4000
@@ -165,19 +157,19 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         
         # Crear clientes para servicios
         self.set_position_client = self.node.create_client(
-            SetMotorIdAndTarget, self._get_topic_name('westwood_motor/set_motor_id_and_target'))
+            SetMotorIdAndTarget, 'westwood_motor/set_motor_id_and_target')
         self.get_position_client = self.node.create_client(
-            GetMotorPositions, self._get_topic_name('westwood_motor/get_motor_positions'))
+            GetMotorPositions, 'westwood_motor/get_motor_positions')
         self.set_mode_client = self.node.create_client(
-            SetMode, self._get_topic_name('westwood_motor/set_mode'))
+            SetMode, 'westwood_motor/set_mode')
         self.set_torque_client = self.node.create_client(
-            SetTorqueEnable, self._get_topic_name('westwood_motor/set_torque_enable'))
+            SetTorqueEnable, 'westwood_motor/set_torque_enable')
         self.set_iq_client = self.node.create_client(
-            SetGoalIq, self._get_topic_name('westwood_motor/set_goal_iq'))
+            SetGoalIq, 'westwood_motor/set_goal_iq')
         
         # Crear publisher si está habilitado
         if self.publish_goal_iq:
-            self.goal_iq_publisher = self.node.create_publisher(Float64MultiArray, self._get_topic_name('debug/goal_iq'), 10)
+            self.goal_iq_publisher = self.node.create_publisher(Float64MultiArray, 'debug/goal_iq', 10)
         
         if timeout_sec is None:
             timeout_sec = 1.0

@@ -8,14 +8,7 @@ import sys
 class StateCommandPublisher(Node):
     def __init__(self):
         super().__init__('state_command_publisher')
-        self.declare_parameter('robot_name', '')
-        self.robot_name = self.get_parameter('robot_name').value
-        self.publisher = self.create_publisher(String, self._get_topic_name('state_command'), 10)
-
-    def _get_topic_name(self, topic_name):
-        if self.robot_name:
-            return f'/{self.robot_name}/{topic_name}'
-        return topic_name
+        self.publisher = self.create_publisher(String, 'state_command', 10)
 
     def publish_command(self, command):
         msg = String()
@@ -45,4 +38,4 @@ def main(args=None):
     return 0
 
 if __name__ == '__main__':
-    sys.exit(main()) 
+    sys.exit(main())
