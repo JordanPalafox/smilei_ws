@@ -162,7 +162,7 @@ def main():
     state_command_sub = node.create_subscription(
         String,
         'state_command',
-        state_command_callback,
+        lambda msg: state_command_callback(msg, node),
         10
     )
 
