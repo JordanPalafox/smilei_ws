@@ -986,21 +986,20 @@ class WestwoodMotorServer(Node):
             
             # Intentar obtener corrientes reales
             for motor_id in motor_ids:
-                manager, local_id, lock = self.get_manager_for_motor(motor_id)
+                manager, local_id = self.get_manager_for_motor(motor_id)
                 
-                if manager is None or lock is None:
+                if manager is None:
                     failed_motor_ids.append(motor_id)
                     currents.append(0.0)
-                    self.get_logger().warning(f'No se encontró manager o lock para motor {motor_id}')
+                    self.get_logger().warning(f'No se encontró manager para motor {motor_id}')
                     continue
                 
                 try:
                     ping_result = self.ping_motor(motor_id)
                     if ping_result:
                         connected_motors.append(motor_id)
-                        with lock:
-                            # Obtener corriente actual del motor
-                            current_result = manager.get_present_iq(local_id)
+                        # Obtener corriente actual del motor
+                        current_result = manager.get_present_iq(local_id)
                         if current_result and len(current_result) > 0:
                             current_current = float(current_result[0][0][0])
                             currents.append(current_current)
@@ -1596,7 +1595,6 @@ def main():
             except Exception as e:
                 print(f"Error al cerrar el manager: {str(e)}")
         node.destroy_node()
-        rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

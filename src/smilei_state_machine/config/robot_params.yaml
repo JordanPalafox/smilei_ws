@@ -3,7 +3,7 @@ state_machine:
   ros__parameters:
 
     # Namespace para el nodo y sus tópicos/servicios
-    __ns: /seguidor
+    __ns: /operador
 
     use_sim_time: false
     
