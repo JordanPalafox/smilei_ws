@@ -98,7 +98,9 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         
         try:
             # Declarar parámetros - configuración flexible para número de motores
-            self.node.declare_parameter('remote_teleoperation.motor_ids', [])  # Lista vacía = usar todos los motores disponibles
+            # Usar lista de enteros por defecto para evitar problemas de tipos
+            self.node.declare_parameter('remote_teleoperation.motor_ids', [1, 2])  # Por defecto motores 1 y 2
+            self.node.declare_parameter('remote_teleoperation.use_all_motors', False)  # True = usar todos los motores disponibles
             self.node.declare_parameter('remote_teleoperation.is_machine_a', True)
             self.node.declare_parameter('remote_teleoperation.machine_a_ip', '192.168.0.144')
             self.node.declare_parameter('remote_teleoperation.machine_b_ip', '192.168.0.2')
@@ -106,6 +108,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             
             # Cargar parámetros
             param_motor_ids = self.node.get_parameter('remote_teleoperation.motor_ids').value
+            use_all_motors = self.node.get_parameter('remote_teleoperation.use_all_motors').value
             self.is_machine_a = self.node.get_parameter('remote_teleoperation.is_machine_a').value
             self.machine_a_ip = self.node.get_parameter('remote_teleoperation.machine_a_ip').value
             self.machine_b_ip = self.node.get_parameter('remote_teleoperation.machine_b_ip').value
@@ -114,20 +117,23 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             # Obtener motores disponibles del hardware manager
             if self.hardware_manager:
                 available_motors = self.hardware_manager.get_available_motors()
-                if param_motor_ids:
-                    # Si se especificaron IDs específicos, usar solo esos que están disponibles
-                    self.motor_ids = [m for m in param_motor_ids if m in available_motors]
-                else:
-                    # Si la lista está vacía, usar todos los motores disponibles
+                if use_all_motors:
+                    # Usar todos los motores disponibles
                     self.motor_ids = available_motors
+                    self.node.get_logger().info(f"Usando TODOS los motores disponibles: {available_motors}")
+                else:
+                    # Usar solo los motores especificados que están disponibles
+                    self.motor_ids = [m for m in param_motor_ids if m in available_motors]
+                    self.node.get_logger().info(f"Usando motores especificados: {self.motor_ids} (disponibles: {available_motors})")
                 
                 self.all_system_motors = available_motors
                 self.num_total_motors = len(available_motors)
             else:
-                # Sin hardware manager, usar parámetros o defaults
-                self.motor_ids = param_motor_ids if param_motor_ids else [1]
+                # Sin hardware manager, usar parámetros
+                self.motor_ids = param_motor_ids
                 self.all_system_motors = self.motor_ids
                 self.num_total_motors = len(self.motor_ids)
+                self.node.get_logger().warning(f"Sin hardware manager - usando motores de parámetros: {self.motor_ids}")
             
             # Configurar red según máquina (basado en código de referencia)
             if self.is_machine_a:

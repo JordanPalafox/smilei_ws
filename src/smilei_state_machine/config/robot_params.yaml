@@ -80,7 +80,7 @@ smilei_state_machine:
       machine_b_ip: '192.168.0.2'   # IP de la máquina B
       
       # Configuración de motores
-      motor_ids: [1,2]                  # Lista de IDs de motores a controlar
+      motor_ids: [1,2,3]                  # Lista de IDs de motores a controlar
       
       # Ganancias de control PD para teleoperación (valores fijos del behavior)
       control_gains:
