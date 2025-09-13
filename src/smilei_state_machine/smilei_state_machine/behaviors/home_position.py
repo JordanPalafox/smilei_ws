@@ -47,7 +47,7 @@ class HomePosition(py_trees.behaviour.Behaviour):
         # Left arm:  [0, -1.5707, 1.5707, -0.785]
         if len(self.motor_ids) == 8:
             # Full 8 motor configuration (right + left arms)
-            self.target_positions = np.array([0.0, 1.5707, -1.5707, -0.785, 0.0, -1.5707, 1.5707, -0.785])
+            self.target_positions = np.array([0.0, 1.5707, -1.5707, -0.785, 0.0, -1.5707, 1.5707, 0.785])
         elif len(self.motor_ids) == 4:
             # Assume right arm only
             self.target_positions = np.array([0.0, 1.5707, -1.5707, -0.785])

@@ -96,10 +96,15 @@ class SayHello(py_trees.behaviour.Behaviour):
             # Para 2 motores, mover solo el segundo (equivalente a m_id_4 del brazo derecho)
             motor_ids_to_move = [self.motor_ids[1]]  # motor ID 2
             target_positions = [qd]
-        elif len(self.motor_ids) >= 4:
+        elif len(self.motor_ids) == 8:
             # Para configuración completa (8 motores), mover motores 4 y 8 (últimos de cada brazo)
+            # El último motor (motor 8) tiene el signo invertido
             motor_ids_to_move = [self.motor_ids[3], self.motor_ids[7]]  # motores 4 y 8
-            target_positions = [qd, qd]
+            target_positions = [qd, -qd]  # Invertir signo para el último motor
+        elif len(self.motor_ids) >= 4:
+            # Para otras configuraciones con 4+ motores, mover motores específicos
+            motor_ids_to_move = [self.motor_ids[3], self.motor_ids[-1]]  # motor 4 y último
+            target_positions = [qd, -qd]  # Invertir signo para el último motor
         elif len(self.motor_ids) >= 1:
             # Si hay menos motores, usar el último disponible
             motor_ids_to_move = [self.motor_ids[-1]]

@@ -182,12 +182,6 @@ def main():
         10
     )
 
-    # Define the motor IDs to control
-    motor_ids = [1]
-
-    # Añadir estado idle para evitar advertencias
-    node.get_logger().info(f"Iniciando la máquina de estados con motores: {motor_ids}")
-    
     # Añadir una pausa para asegurar que ROS está inicializado
     time.sleep(2.0)
     
@@ -200,6 +194,16 @@ def main():
         auto_detect=True,
         debug=False
     )
+
+    # Obtener motor IDs dinámicamente desde el hardware manager
+    motor_ids = hardware_manager.get_available_motors()
+    
+    # Si no hay motores detectados, usar [1] como fallback para modo simulación
+    if not motor_ids:
+        motor_ids = [1]
+        node.get_logger().warning("No se detectaron motores, usando motor ID [1] como fallback")
+    
+    node.get_logger().info(f"Iniciando la máquina de estados con motores detectados: {motor_ids}")
 
     # Crear comportamiento idle personalizado
     class IdleBehavior(py_trees.behaviour.Behaviour):
