@@ -3,24 +3,21 @@ import numpy as np
 import rclpy
 import math
 import time
-import sys
-import select
-from westwood_motor_interfaces.srv import SetMotorIdAndTarget
-from westwood_motor_interfaces.srv import GetMotorPositions
+from pybear import Manager
 
 class SayHello(py_trees.behaviour.Behaviour):
     """Comportamiento que mueve los motores en un patrón sinusoidal."""
-    def __init__(self, name: str, motor_ids: list[int], node=None):
+    def __init__(self, name: str, motor_ids: list[int], node=None, hardware_manager=None):
         super().__init__(name)
         self.motor_ids = motor_ids
         self.node = node
-        self.set_position_client = None
-        self.get_position_client = None
         self.running = False
         self.own_node = False
         self.last_time = time.time()
         self.zero_position_sent = False
-        self.zero_position_future = None
+        
+        # Use hardware manager instead of direct Pybear
+        self.hardware_manager = hardware_manager
 
     def setup(self, timeout_sec=None, **kwargs) -> bool:
         # Usar el nodo proporcionado en lugar de crear uno nuevo
@@ -29,32 +26,17 @@ class SayHello(py_trees.behaviour.Behaviour):
             self.own_node = True
         else:
             self.own_node = False
-            
-        self.set_position_client = self.node.create_client(
-            SetMotorIdAndTarget,
-            'westwood_motor/set_motor_id_and_target'
-        )
         
-        self.get_position_client = self.node.create_client(
-            GetMotorPositions,
-            'westwood_motor/get_motor_positions'
-        )
-        
-        if timeout_sec is None:
-            timeout_sec = 1.0
-        
-        # Esperar a que estén disponibles los servicios
-        services_available = True
-        
-        # Intentar esperar por el servicio de posición
-        if not self.set_position_client.wait_for_service(timeout_sec=timeout_sec):
-            self.node.get_logger().warning("Servicio set_motor_id_and_target no disponible, continuando en modo simulación")
-            services_available = False
-        
-        # Intentar esperar por el servicio de obtención de posición
-        if not self.get_position_client.wait_for_service(timeout_sec=timeout_sec):
-            self.node.get_logger().warning("Servicio get_motor_positions no disponible, continuando en modo simulación")
-            services_available = False
+        # Check hardware connection using hardware manager
+        if self.hardware_manager is not None:
+            available_motors = self.hardware_manager.get_available_motors()
+            self.available_motors = [m for m in self.motor_ids if m in available_motors]
+            if self.available_motors:
+                self.node.get_logger().info(f"Hardware conectado - motores disponibles: {self.available_motors}")
+            else:
+                self.node.get_logger().warning("No hay motores disponibles")
+        else:
+            self.node.get_logger().warning("Hardware manager no disponible - modo simulación")
         
         return True  # Siempre retorna True para permitir que continúe
 
@@ -63,91 +45,84 @@ class SayHello(py_trees.behaviour.Behaviour):
         self.running = True
         self.last_time = time.time()
         self.zero_position_sent = False
-        self.zero_position_future = None
 
     def update(self) -> py_trees.common.Status:
         # Si no está corriendo, devolver SUCCESS para permitir la transición al siguiente estado
         if not self.running:
             return py_trees.common.Status.SUCCESS
         
-        # Verificar si hay entrada del usuario para terminar
-        if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
-            line = sys.stdin.readline().strip()
-            if line:
-                self.node.get_logger().info("Terminando comportamiento Say Hello por entrada del usuario")
-                self.running = False
-                return py_trees.common.Status.SUCCESS
+        # El comportamiento se controla a través de comandos de estado, no entrada de usuario
         
-        # Primero enviar todos los motores a posición cero como en PyBEAR (zero_position())
+        # Primero enviar todos los motores a posición cero como en el código original
         if not self.zero_position_sent:
-            self.node.get_logger().info("Enviando todos los motores a posición cero")
-            zero_positions = [0.0] * len(self.motor_ids)
+            self.node.get_logger().info("Say hello: primero enviando todos los motores a posición cero")
             
-            req = SetMotorIdAndTarget.Request()
-            req.motor_ids = self.motor_ids
-            req.target_positions = zero_positions
-            
+            # En el código original, say_hello() llama a zero_position() completo
+            # Aquí hacemos lo mismo pero de forma simplificada
             try:
-                self.zero_position_future = self.set_position_client.call_async(req)
+                # Send all motors to zero position using hardware manager
+                position_pairs = [(motor_id, 0.0) for motor_id in self.motor_ids]
+                if self.hardware_manager:
+                    self.hardware_manager.set_goal_position(*position_pairs)
+                else:
+                    self.node.get_logger().debug("[SIM] Enviando motores a posición cero")
+                
+                # Esperar un poco para que lleguen a cero
+                time.sleep(1.0)
                 self.zero_position_sent = True
-                return py_trees.common.Status.RUNNING
+                self.node.get_logger().info("Motores en posición cero, iniciando movimiento sinusoidal")
             except Exception as e:
                 self.node.get_logger().error(f"Error al enviar a posición cero: {str(e)}")
                 return py_trees.common.Status.FAILURE
-        
-        # Verificar si la posición cero se completó
-        if self.zero_position_future and not self.zero_position_future.done():
-            return py_trees.common.Status.RUNNING
         
         # Una vez en cero, proceder con el movimiento sinusoidal
         # Calcular posición sinusoidal como en PyBEAR
         seconds = time.time()
         qd = 0.22 * math.sin(12.0 * seconds) - 1
         
-        # Determinar qué motores mover basado en la lógica de PyBEAR
-        # En PyBEAR: m_id_4 para brazo derecho y m_id_8 para brazo izquierdo
-        # En nuestro caso: último motor de cada brazo
+        # En el código original: bear_r.set_goal_position((m_id_4, qd)) y bear_l.set_goal_position((m_id_8, qd))
+        # Es decir, solo mueve el motor 4 (último del brazo derecho) y motor 8 (último del brazo izquierdo)
+        # Como tenemos motor_ids [1,2], solo moveremos el motor 2 (que sería el equivalente al m_id_4)
         motor_ids_to_move = []
         target_positions = []
         
-        if len(self.motor_ids) >= 4:
-            # Asumiendo que la primera mitad son brazo derecho, segunda mitad brazo izquierdo
-            mid_point = len(self.motor_ids) // 2
-            
-            # Último motor del brazo derecho (equivalente a m_id_4)
-            right_arm_last = self.motor_ids[mid_point - 1]
-            # Último motor del brazo izquierdo (equivalente a m_id_8)  
-            left_arm_last = self.motor_ids[-1]
-            
-            motor_ids_to_move = [right_arm_last, left_arm_last]
-            target_positions = [qd, qd]  # Mismo movimiento para ambos brazos
+        if len(self.motor_ids) == 2:
+            # Para 2 motores, mover solo el segundo (equivalente a m_id_4 del brazo derecho)
+            motor_ids_to_move = [self.motor_ids[1]]  # motor ID 2
+            target_positions = [qd]
+        elif len(self.motor_ids) >= 4:
+            # Para configuración completa (8 motores), mover motores 4 y 8 (últimos de cada brazo)
+            motor_ids_to_move = [self.motor_ids[3], self.motor_ids[7]]  # motores 4 y 8
+            target_positions = [qd, qd]
         elif len(self.motor_ids) >= 1:
-            # Si hay pocos motores, usar el último disponible
+            # Si hay menos motores, usar el último disponible
             motor_ids_to_move = [self.motor_ids[-1]]
             target_positions = [qd]
         
-        # Si tenemos motores para mover
+        # Enviar comandos solo a los motores específicos
         if motor_ids_to_move:
-            # Crear solicitud para establecer posiciones
-            req = SetMotorIdAndTarget.Request()
-            req.motor_ids = motor_ids_to_move
-            req.target_positions = target_positions
-            
-            # Intentar llamar al servicio
             try:
-                future = self.set_position_client.call_async(req)
-                rclpy.spin_until_future_complete(self.node, future, timeout_sec=0.1)
-                
-                if future.done():
-                    result = future.result()
-                    if not result.success:
-                        self.node.get_logger().warning(f"Error al establecer posiciones: {result.message}")
+                # Send position commands using hardware manager
+                position_pairs = [(motor_id, pos) for motor_id, pos in zip(motor_ids_to_move, target_positions)]
+                if self.hardware_manager:
+                    self.hardware_manager.set_goal_position(*position_pairs)
+                    
+                    # Show actual positions every 50 cycles (every 0.5 seconds) to avoid spam
+                    current_time = time.time()
+                    if not hasattr(self, 'last_position_log_time'):
+                        self.last_position_log_time = current_time
+                    
+                    if current_time - self.last_position_log_time >= 0.5:
+                        actual_positions = self.hardware_manager.get_present_position(*self.motor_ids)
+                        self.node.get_logger().info(f"Say Hello - Objetivo={[f'{pos:.4f}' for pos in target_positions]}, Real motor {motor_ids_to_move[0]}={actual_positions[motor_ids_to_move[0]-1]:.4f}")
+                        self.last_position_log_time = current_time
+                        
                 else:
-                    self.node.get_logger().debug("Timeout al establecer posiciones")
+                    self.node.get_logger().debug(f"[SIM] Say hello moviendo: {position_pairs}")
             except Exception as e:
-                self.node.get_logger().error(f"Error al llamar al servicio: {str(e)}")
+                self.node.get_logger().error(f"Error al establecer posiciones: {str(e)}")
         else:
-            self.node.get_logger().warning("No hay motores para el comportamiento Say Hello")
+            self.node.get_logger().warning("No hay motores configurados para say_hello")
         
         # Pausa de 0.01 segundos como en PyBEAR
         time.sleep(0.01)

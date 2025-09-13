@@ -1,19 +1,19 @@
 import py_trees
 import time
 import rclpy
-from westwood_motor_interfaces.srv import SetMotorIdAndTarget
-from westwood_motor_interfaces.srv import SetTorqueEnable
 
 class DisableRobot(py_trees.behaviour.Behaviour):
     """Comportamiento que deshabilita los motores y los pone en un estado seguro"""
-    def __init__(self, name: str, motor_ids: list[int], node=None):
+    def __init__(self, name: str, motor_ids: list[int], node=None, hardware_manager=None):
         super().__init__(name)
         self.motor_ids = motor_ids
         self.node = node
-        self.set_position_client = None
-        self.set_torque_client = None
         self.flag = True
         self.own_node = False
+        
+        # Use hardware manager instead of direct Pybear
+        self.hardware_manager = hardware_manager
+        self.available_motors = []
 
     def setup(self, timeout_sec=None, **kwargs) -> bool:
         # Usar el nodo proporcionado en lugar de crear uno nuevo
@@ -22,53 +22,33 @@ class DisableRobot(py_trees.behaviour.Behaviour):
             self.own_node = True
         else:
             self.own_node = False
-            
-        self.set_position_client = self.node.create_client(
-            SetMotorIdAndTarget,
-            'westwood_motor/set_motor_id_and_target'
-        )
         
-        self.set_torque_client = self.node.create_client(
-            SetTorqueEnable,
-            'westwood_motor/set_torque_enable'
-        )
-        
-        if timeout_sec is None:
-            timeout_sec = 1.0
-            
-        # Intentar esperar por los servicios
-        if not self.set_position_client.wait_for_service(timeout_sec=timeout_sec):
-            self.node.get_logger().warning("Servicio set_motor_id_and_target no disponible, continuando en modo simulación")
-        
-        if not self.set_torque_client.wait_for_service(timeout_sec=timeout_sec):
-            self.node.get_logger().warning("Servicio set_torque_enable no disponible, continuando en modo simulación")
+        # Check hardware connection using hardware manager
+        if self.hardware_manager is not None:
+            available_motors = self.hardware_manager.get_available_motors()
+            self.available_motors = [m for m in self.motor_ids if m in available_motors]
+            if self.available_motors:
+                self.node.get_logger().info(f"Hardware conectado - motores disponibles: {self.available_motors}")
+            else:
+                self.node.get_logger().warning("No hay motores disponibles")
+        else:
+            self.node.get_logger().warning("Hardware manager no disponible - modo simulación")
         
         return True  # Siempre retorna True para permitir que continúe
 
     def home_position(self):
-        """Envía todos los motores a posición home (90 grados)"""
+        """Envía todos los motores a posición home (90 grados) usando hardware_manager"""
         self.node.get_logger().info("Enviando motores a posición home")
         
-        # Crear solicitud para establecer posiciones a home
-        req = SetMotorIdAndTarget.Request()
-        req.motor_ids = self.motor_ids
-        req.target_positions = [1.5707] * len(self.motor_ids)  # Aproximadamente 90 grados
-        
-        # Llamar al servicio
         try:
-            future = self.set_position_client.call_async(req)
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
-            
-            if future.done():
-                result = future.result()
-                if not result.success:
-                    self.node.get_logger().warning(f"Error al establecer posición home: {result.message}")
-                    return False
+            if self.hardware_manager:
+                # Set all motors to home position (1.5707 rad ≈ 90 degrees)
+                position_pairs = [(motor_id, 1.5707) for motor_id in self.motor_ids]
+                self.hardware_manager.set_goal_position(*position_pairs)
             else:
-                self.node.get_logger().warning("Timeout al establecer posición home")
-                return False
+                self.node.get_logger().debug("[SIM] Enviando motores a posición home")
             
-            # Esperar a que los motores lleguen a la posición
+            # Wait for motors to reach position
             time.sleep(2.0)
             return True
         except Exception as e:
@@ -76,28 +56,16 @@ class DisableRobot(py_trees.behaviour.Behaviour):
             return False
 
     def disable_torque(self):
-        """Deshabilita el torque de todos los motores"""
+        """Deshabilita el torque de todos los motores usando hardware_manager"""
         self.node.get_logger().info("Deshabilitando torque de los motores")
         
-        # Crear solicitud para deshabilitar torque
-        req = SetTorqueEnable.Request()
-        req.motor_ids = self.motor_ids
-        req.enable_torque = [False] * len(self.motor_ids)
-        
-        # Llamar al servicio
         try:
-            future = self.set_torque_client.call_async(req)
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
-            
-            if future.done():
-                result = future.result()
-                if not result.success:
-                    self.node.get_logger().warning(f"Error al deshabilitar torque: {result.message}")
-                    return False
+            if self.hardware_manager:
+                # Disable torque for all motors
+                disable_pairs = [(motor_id, 0) for motor_id in self.motor_ids]
+                self.hardware_manager.set_torque_enable(*disable_pairs)
             else:
-                self.node.get_logger().warning("Timeout al deshabilitar torque")
-                return False
-            
+                self.node.get_logger().debug("[SIM] Deshabilitando torque de los motores")
             return True
         except Exception as e:
             self.node.get_logger().error(f"Error al deshabilitar torque: {str(e)}")

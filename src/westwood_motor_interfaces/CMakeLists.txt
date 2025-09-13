@@ -24,7 +24,6 @@ set(srv_files
   "srv/SetGains.srv"
   "srv/SetMode.srv"
   "srv/SetTorqueEnable.srv"
-  "srv/SetGoalIq.srv"
 )
 
 
