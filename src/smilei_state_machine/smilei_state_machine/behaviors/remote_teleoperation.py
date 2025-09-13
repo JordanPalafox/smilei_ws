@@ -25,6 +25,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         # Hardware manager para control de motores
         self.hardware_manager = hardware_manager
         self.available_motors = []
+        self.all_system_motors = []
         
         # Configuración de red (se carga desde parámetros ROS2)
         self.motor_ids = None
@@ -97,18 +98,36 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         
         try:
             # Declarar parámetros - configuración flexible para número de motores
-            self.node.declare_parameter('remote_teleoperation.motor_ids', [1])  # Por defecto un motor
+            self.node.declare_parameter('remote_teleoperation.motor_ids', [])  # Lista vacía = usar todos los motores disponibles
             self.node.declare_parameter('remote_teleoperation.is_machine_a', True)
             self.node.declare_parameter('remote_teleoperation.machine_a_ip', '192.168.0.144')
             self.node.declare_parameter('remote_teleoperation.machine_b_ip', '192.168.0.2')
-            self.node.declare_parameter('remote_teleoperation.num_total_motors', 2)  # Total de motores en el sistema (A+B)
+            self.node.declare_parameter('remote_teleoperation.max_total_motors', 8)  # Máximo de motores en el sistema
             
             # Cargar parámetros
-            self.motor_ids = self.node.get_parameter('remote_teleoperation.motor_ids').value
+            param_motor_ids = self.node.get_parameter('remote_teleoperation.motor_ids').value
             self.is_machine_a = self.node.get_parameter('remote_teleoperation.is_machine_a').value
             self.machine_a_ip = self.node.get_parameter('remote_teleoperation.machine_a_ip').value
             self.machine_b_ip = self.node.get_parameter('remote_teleoperation.machine_b_ip').value
-            self.num_total_motors = self.node.get_parameter('remote_teleoperation.num_total_motors').value
+            self.max_total_motors = self.node.get_parameter('remote_teleoperation.max_total_motors').value
+            
+            # Obtener motores disponibles del hardware manager
+            if self.hardware_manager:
+                available_motors = self.hardware_manager.get_available_motors()
+                if param_motor_ids:
+                    # Si se especificaron IDs específicos, usar solo esos que están disponibles
+                    self.motor_ids = [m for m in param_motor_ids if m in available_motors]
+                else:
+                    # Si la lista está vacía, usar todos los motores disponibles
+                    self.motor_ids = available_motors
+                
+                self.all_system_motors = available_motors
+                self.num_total_motors = len(available_motors)
+            else:
+                # Sin hardware manager, usar parámetros o defaults
+                self.motor_ids = param_motor_ids if param_motor_ids else [1]
+                self.all_system_motors = self.motor_ids
+                self.num_total_motors = len(self.motor_ids)
             
             # Configurar red según máquina (basado en código de referencia)
             if self.is_machine_a:
@@ -128,12 +147,14 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             
             # Inicializar variables de control basadas en número total de motores
             self.node.get_logger().info(f"Configuración: {len(self.motor_ids)} motor(es) local(es), {self.num_total_motors} total en sistema")
+            self.node.get_logger().info(f"Motores locales: {self.motor_ids}")
+            self.node.get_logger().info(f"Todos los motores del sistema: {self.all_system_motors}")
             
             # Inicializar arrays con tamaño correcto
             # current_positions/velocities: solo para motores locales
             self.current_positions = [0.0] * len(self.motor_ids)
             self.current_velocities = [0.0] * len(self.motor_ids)
-            # target_positions: para todo el sistema (A+B)
+            # target_positions: para todo el sistema
             self.target_positions = [0.0] * self.num_total_motors
             
         except Exception as e:
@@ -142,10 +163,10 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         
         # Verificar hardware
         if self.hardware_manager is not None:
-            available_motors = self.hardware_manager.get_available_motors()
-            self.available_motors = [m for m in self.motor_ids if m in available_motors]
+            # Los motores ya fueron configurados arriba, solo verificar conexión
+            self.available_motors = [m for m in self.motor_ids if m in self.all_system_motors]
             if self.available_motors:
-                self.node.get_logger().info(f"Hardware conectado - motores disponibles: {self.available_motors}")
+                self.node.get_logger().info(f"Hardware conectado - motores disponibles para teleoperación: {self.available_motors}")
             else:
                 self.node.get_logger().warning("No hay motores disponibles - modo simulación")
         else:
@@ -291,21 +312,19 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         
         try:
             # Preparar posiciones locales para enviar
-            # Solo enviar las posiciones de los motores locales, rellenando con ceros el resto
-            positions_to_send = [0.0] * self.num_total_motors
+            # Crear array del tamaño máximo y llenar con posiciones de motores locales
+            positions_to_send = [0.0] * max(self.max_total_motors, self.num_total_motors)
             
-            # Llenar con posiciones reales de motores locales
+            # Llenar con posiciones reales de motores locales usando sus IDs como índices
             for i, motor_id in enumerate(self.motor_ids):
-                if i < len(self.current_positions):
-                    # Para máquina A: motor en índice 0 del array UDP
-                    # Para máquina B: motor en índice 1 del array UDP
-                    if self.is_machine_a:
-                        positions_to_send[0] = self.current_positions[i]  # A siempre en índice 0
-                    else:
-                        positions_to_send[1] = self.current_positions[i]  # B siempre en índice 1
+                if i < len(self.current_positions) and motor_id <= len(positions_to_send):
+                    # Usar el ID del motor como índice en el array UDP (motor_id - 1 para base 0)
+                    motor_index = motor_id - 1
+                    if motor_index >= 0 and motor_index < len(positions_to_send):
+                        positions_to_send[motor_index] = self.current_positions[i]
             
-            # Crear formato dinámico basado en número total de motores
-            format_str = f'{self.num_total_motors}f'
+            # Crear formato dinámico basado en número de motores a enviar
+            format_str = f'{len(positions_to_send)}f'
             
             # Empaquetar y enviar
             struct_ql = struct.pack(format_str, *positions_to_send)
@@ -316,9 +335,14 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 self._send_count = 0
             self._send_count += 1
             if self._send_count % 100 == 0:
-                pos_str = ', '.join(f'{p:.3f}' for p in positions_to_send)
+                # Mostrar posiciones de todos los motores activos
+                active_positions = [(i+1, pos) for i, pos in enumerate(positions_to_send) if pos != 0.0]
                 machine = 'A' if self.is_machine_a else 'B'
-                self.node.get_logger().info(f"UDP TX [{machine}] -> {self.local_addr}: [A:{positions_to_send[0]:.3f}, B:{positions_to_send[1]:.3f}]")
+                if active_positions:
+                    pos_str = ', '.join(f'M{motor_id}:{pos:.3f}' for motor_id, pos in active_positions)
+                    self.node.get_logger().info(f"UDP TX [{machine}] -> {self.local_addr}: {pos_str}")
+                else:
+                    self.node.get_logger().info(f"UDP TX [{machine}] -> {self.local_addr}: todas posiciones en 0")
             
         except socket.timeout:
             # Para máquina A con problemas de timeout, contar silenciosamente
@@ -340,8 +364,9 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         try:
             data, addr = self.receive_socket.recvfrom(1024)
             
-            # Crear formato dinámico basado en número total de motores
-            format_str = f'{self.num_total_motors}f'
+            # Calcular número de floats recibidos basado en tamaño de datos
+            num_floats = len(data) // 4  # Cada float son 4 bytes
+            format_str = f'{num_floats}f'
             
             # Desempaquetar datos recibidos
             struct_qr = struct.unpack(format_str, data)
@@ -355,7 +380,13 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self._recv_count += 1
             if self._recv_count % 100 == 0:
                 machine = 'A' if self.is_machine_a else 'B'
-                self.node.get_logger().info(f"UDP RX [{machine}] <- {addr}: [A:{struct_qr[0]:.3f}, B:{struct_qr[1]:.3f}]")
+                # Mostrar posiciones de todos los motores con datos no cero
+                active_positions = [(i+1, pos) for i, pos in enumerate(struct_qr) if pos != 0.0]
+                if active_positions:
+                    pos_str = ', '.join(f'M{motor_id}:{pos:.3f}' for motor_id, pos in active_positions)
+                    self.node.get_logger().info(f"UDP RX [{machine}] <- {addr}: {pos_str}")
+                else:
+                    self.node.get_logger().info(f"UDP RX [{machine}] <- {addr}: todas posiciones en 0")
                 
         except socket.timeout:
             # Timeout normal - no hacer nada, pero contar para debug
@@ -379,12 +410,17 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             # Procesar datos recibidos
             for entry in self.received_data:
                 # Actualizar posiciones objetivo con validación básica
-                for i in range(min(len(entry), self.num_total_motors)):
+                # Expandir target_positions si es necesario
+                while len(self.target_positions) < len(entry):
+                    self.target_positions.append(0.0)
+                
+                for i in range(len(entry)):
                     received_position = entry[i]
                     
                     # Aplicar límites básicos de seguridad para cualquier motor
                     if received_position > -3.15 and received_position < 3.15:  # Límites generales ±π
-                        self.target_positions[i] = received_position
+                        if i < len(self.target_positions):
+                            self.target_positions[i] = received_position
             
             # Limpiar datos procesados
             self.received_data.clear()
@@ -402,11 +438,11 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                     currents.append(0.0)
                 else:
                     # Máquina B: usar PD control exacto del pd_control_node.py
-                    # Obtener target desde datos UDP (posición de máquina A)
+                    # Obtener target desde datos UDP usando el ID del motor como índice
                     target_pos = 0.0  # Default
-                    if len(self.target_positions) > 0:
-                        # Target es la posición de A (índice 0 en array UDP)
-                        target_pos = self.target_positions[0] if len(self.target_positions) > 0 else 0.0
+                    motor_index = motor_id - 1  # Convertir a índice base 0
+                    if motor_index >= 0 and motor_index < len(self.target_positions):
+                        target_pos = self.target_positions[motor_index]
                     
                     current_pos = self.current_positions[i] if i < len(self.current_positions) else 0.0
                     
@@ -432,13 +468,15 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                     
                     currents.append(current)
                     
-                    # Debug cada 100 iteraciones
-                    if i == 0 and hasattr(self, '_debug_counter'):
-                        self._debug_counter += 1
-                        if self._debug_counter % 100 == 0:
-                            self.node.get_logger().info(f"🎯 PD Control: pos={current_pos:.3f}, target={target_pos:.3f}, error={error:.3f}, current={current:.3f}A")
-                    elif i == 0:
-                        self._debug_counter = 1
+                    # Debug cada 100 iteraciones - mostrar info para cada motor
+                    if not hasattr(self, '_debug_counter'):
+                        self._debug_counter = {}
+                    if motor_id not in self._debug_counter:
+                        self._debug_counter[motor_id] = 0
+                    
+                    self._debug_counter[motor_id] += 1
+                    if self._debug_counter[motor_id] % 100 == 0:
+                        self.node.get_logger().info(f"🎯 PD Control M{motor_id}: pos={current_pos:.3f}, target={target_pos:.3f}, error={error:.3f}, current={current:.3f}A")
             
             return currents
             
@@ -523,19 +561,21 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self._current_log_count += 1
             
             if self._current_log_count % 50 == 0:
-                current_str = ', '.join(f'{c:.3f}' for c in currents)
-                motor_str = ', '.join(f'M{mid}' for mid in self.motor_ids)
                 machine = 'A' if self.is_machine_a else 'B'
-                remote_machine = 'B' if self.is_machine_a else 'A'
-                local_pos = self.current_positions[0] if self.current_positions else 0.0
-                remote_pos = self.target_positions[1] if self.is_machine_a and len(self.target_positions) > 1 else (self.target_positions[0] if not self.is_machine_a and len(self.target_positions) > 0 else 0.0)
-                error = local_pos - remote_pos
-                # Normalizar error para mostrar
-                while error > 3.14159:
-                    error -= 2 * 3.14159
-                while error < -3.14159:
-                    error += 2 * 3.14159
-                self.node.get_logger().info(f"Debug [{machine}]: Local={local_pos:.3f}, Remote[{remote_machine}]={remote_pos:.3f}, Error={error:.3f}, I={current_str}")
+                # Mostrar información de cada motor por separado
+                for i, motor_id in enumerate(self.motor_ids):
+                    if i < len(currents) and i < len(self.current_positions):
+                        current = currents[i]
+                        local_pos = self.current_positions[i]
+                        motor_index = motor_id - 1
+                        remote_pos = self.target_positions[motor_index] if motor_index < len(self.target_positions) else 0.0
+                        error = local_pos - remote_pos
+                        # Normalizar error para mostrar
+                        while error > 3.14159:
+                            error -= 2 * 3.14159
+                        while error < -3.14159:
+                            error += 2 * 3.14159
+                        self.node.get_logger().info(f"Debug [{machine}] M{motor_id}: Local={local_pos:.3f}, Remote={remote_pos:.3f}, Error={error:.3f}, I={current:.3f}A")
             
             return success
             
@@ -703,10 +743,21 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             time.sleep(2)
             
             # Ir a posición home (como en código de referencia)
-            # home_position() en el código original
-            home_positions = [0.0, 1.5707, -1.5707, -0.785, 0.0, -1.5707, 1.5707, -0.785]
-            position_pairs = [(motor_id, home_positions[i]) for i, motor_id in enumerate(self.motor_ids[:8])]
-            self.hardware_manager.set_goal_position(*position_pairs)
+            # home_position() en el código original - posiciones seguras para cada motor
+            default_home_positions = [0.0, 1.5707, -1.5707, -0.785, 0.0, -1.5707, 1.5707, -0.785]
+            
+            position_pairs = []
+            for i, motor_id in enumerate(self.motor_ids):
+                # Usar posición home por defecto si está en la lista, sino usar 0.0
+                if i < len(default_home_positions):
+                    home_pos = default_home_positions[i]
+                else:
+                    home_pos = 0.0  # Posición segura por defecto
+                position_pairs.append((motor_id, home_pos))
+            
+            if position_pairs:
+                self.hardware_manager.set_goal_position(*position_pairs)
+                self.node.get_logger().info(f"Enviando a home {len(position_pairs)} motores: {[f'M{mid}:{pos:.3f}' for mid, pos in position_pairs]}")
             
         except Exception as e:
             self.node.get_logger().error(f"Error restaurando control: {e}")

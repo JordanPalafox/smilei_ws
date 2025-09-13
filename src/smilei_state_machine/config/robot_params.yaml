@@ -76,11 +76,11 @@ smilei_state_machine:
     remote_teleoperation:
       # Configuración de red
       is_machine_a: true              # true para máquina A, false para máquina B
-      machine_a_ip: '192.168.0.144'   # IP de la máquina A
+      machine_a_ip: '192.168.0.100'   # IP de la máquina A
       machine_b_ip: '192.168.0.2'   # IP de la máquina B
       
       # Configuración de motores
-      motor_ids: [1]                  # Lista de IDs de motores a controlar
+      motor_ids: [1,2]                  # Lista de IDs de motores a controlar
       
       # Ganancias de control PD para teleoperación (valores fijos del behavior)
       control_gains:
