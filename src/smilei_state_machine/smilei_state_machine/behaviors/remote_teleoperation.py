@@ -490,18 +490,30 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                     # Límites de seguridad
                     current = max(-self.max_current, min(self.max_current, current))
 
-                    # >>> INICIO: Medida de seguridad de límites de articulación
+                    # >>> INICIO: Medida de seguridad de límites de articulación (con recuperación)
                     limit_key = self.joint_limit_keys.get(motor_id)
                     if limit_key:
                         limits = self.joint_limits.get(limit_key)
                         # Asegurarse que los límites existen y son una lista/tupla de 2 elementos
                         if limits and isinstance(limits, (list, tuple)) and len(limits) == 2:
-                            if not (limits[0] <= current_pos <= limits[1]):
-                                self.node.get_logger().warning(
-                                    f"M{motor_id} fuera de límites! Pos: {current_pos:.3f}, "
-                                    f"Límites: [{limits[0]:.3f}, {limits[1]:.3f}]. Corriente a 0."
-                                )
-                                current = 0.0
+                            min_limit, max_limit = limits[0], limits[1]
+                            
+                            # Comprobar si la posición actual está fuera de los límites
+                            is_out_of_bounds = not (min_limit <= current_pos <= max_limit)
+                            
+                            if is_out_of_bounds:
+                                # Si está fuera de los límites, permitir corriente solo si el objetivo está DENTRO de los límites
+                                is_target_in_bounds = (min_limit <= target_pos <= max_limit)
+                                
+                                if not is_target_in_bounds:
+                                    # Si tanto la posición actual como el objetivo están fuera de los límites, forzar corriente a cero.
+                                    self.node.get_logger().warning(
+                                        f"M{motor_id} está fuera de límites (Pos: {current_pos:.3f}) y el "
+                                        f"objetivo también (Target: {target_pos:.3f}). Forzando corriente a 0."
+                                    )
+                                    current = 0.0
+                                # Si la posición actual está fuera pero el objetivo está dentro,
+                                # el controlador PD aplicará naturalmente una corriente correctiva.
                         else:
                             self.node.get_logger().warning(f"Límites para M{motor_id} ('{limit_key}') no definidos o malformados.")
                     # <<< FIN: Medida de seguridad
