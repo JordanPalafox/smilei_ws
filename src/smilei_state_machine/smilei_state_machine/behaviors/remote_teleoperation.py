@@ -433,9 +433,13 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             return True
 
     def calculate_control_currents(self):
-        """Calcula corrientes de control usando algoritmo PD exacto del pd_control_node.py"""
+        """Calcula corrientes de control usando algoritmo PD exacto del pd_control_node.py con compensación de gravedad"""
         try:
             currents = []
+            
+            # Determinar tipo de brazo basado en motor IDs para compensación de gravedad
+            is_right_arm = any(motor_id <= 4 for motor_id in self.motor_ids)
+            is_left_arm = any(motor_id > 4 for motor_id in self.motor_ids)
             
             # Para cada motor local
             for i, motor_id in enumerate(self.motor_ids):
@@ -464,7 +468,25 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                         vel_estimate = 0.0
                     
                     # Control PD no lineal exacto (pd_control_node.py líneas 143-144)
-                    tau = -self.kp * ((abs(error)**self.p1) * np.sign(error)) - self.kd * vel_estimate
+                    tau_pd = -self.kp * ((abs(error)**self.p1) * np.sign(error)) - self.kd * vel_estimate
+                    
+                    # Aplicar compensación de gravedad
+                    tau_gravity = 0.0
+                    if is_right_arm and motor_id <= 4:
+                        # Brazo derecho (motores 1-4)
+                        gravity_vector = self.right_gravity_vector(self.current_positions[:4])
+                        gravity_index = motor_id - 1  # motor 1->índice 0, motor 2->índice 1, etc.
+                        if gravity_index < len(gravity_vector):
+                            tau_gravity = gravity_vector[gravity_index]
+                    elif is_left_arm and motor_id > 4:
+                        # Brazo izquierdo (motores 5-8)
+                        gravity_vector = self.left_gravity_vector(self.current_positions[:4])  # Usar primeras 4 posiciones
+                        gravity_index = motor_id - 5  # motor 5->índice 0, motor 6->índice 1, etc.
+                        if gravity_index < len(gravity_vector):
+                            tau_gravity = gravity_vector[gravity_index]
+                    
+                    # Torque total = PD + compensación de gravedad
+                    tau = tau_pd + tau_gravity
                     
                     # Convertir torque a corriente (pd_control_node.py líneas 147-148)
                     current = tau / self.Kt
@@ -474,7 +496,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                     
                     currents.append(current)
                     
-                    # Debug cada 100 iteraciones - mostrar info para cada motor
+                    # Debug cada 100 iteraciones - mostrar info para cada motor incluyendo gravedad
                     if not hasattr(self, '_debug_counter'):
                         self._debug_counter = {}
                     if motor_id not in self._debug_counter:
@@ -482,7 +504,8 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                     
                     self._debug_counter[motor_id] += 1
                     if self._debug_counter[motor_id] % 100 == 0:
-                        self.node.get_logger().info(f"🎯 PD Control M{motor_id}: pos={current_pos:.3f}, target={target_pos:.3f}, error={error:.3f}, current={current:.3f}A")
+                        arm_type = "R" if motor_id <= 4 else "L"
+                        self.node.get_logger().info(f"🎯 PD+Gravity Control M{motor_id}[{arm_type}]: pos={current_pos:.3f}, target={target_pos:.3f}, error={error:.3f}, tau_pd={tau_pd:.3f}, tau_grav={tau_gravity:.3f}, current={current:.3f}A")
             
             return currents
             
