@@ -47,7 +47,8 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         self.data_lock = threading.Lock()
         
         # Ganancias de control PD - usando los valores del nodo PD que funciona
-        self.kp = 1.0        # Proportional gain (del pd_control_node.py)
+        self.kp = 1.0        # Proportional gain (del pd_control_node.py) - default para todos excepto motor 7
+        self.kp_motor7 = 0.5  # Proportional gain específica para motor 7
         self.kd = 0.1        # Damping gain (del pd_control_node.py)
         
         # Parámetros del control PD no lineal (del pd_control_node.py)
@@ -454,7 +455,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                     
                     # Error de posición (pd_control_node.py líneas 132-133)
                     error = current_pos - target_pos
-                    
+
                     # Estimador de velocidad (pd_control_node.py líneas 135-140)
                     if i < len(self.vel_estimators):
                         self.vel_estimators[i] = self.Fc * (self.theta_estimators[i] + current_pos)
@@ -462,9 +463,12 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                         vel_estimate = self.vel_estimators[i]
                     else:
                         vel_estimate = 0.0
-                    
+
+                    # Usar kp específica para motor 7, kp normal para el resto
+                    kp_value = self.kp_motor7 if motor_id == 7 else self.kp
+
                     # Control PD no lineal exacto (pd_control_node.py líneas 143-144)
-                    tau = -self.kp * ((abs(error)**self.p1) * np.sign(error)) - self.kd * vel_estimate
+                    tau = -kp_value * ((abs(error)**self.p1) * np.sign(error)) - self.kd * vel_estimate
                     
                     # Convertir torque a corriente (pd_control_node.py líneas 147-148)
                     current = tau / self.Kt
