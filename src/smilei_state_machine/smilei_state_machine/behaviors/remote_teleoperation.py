@@ -15,10 +15,9 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
     Comportamiento de teleoperación remota basado exactamente en el código de referencia main.py
     Implementa control bilateral con compensación de gravedad y límites de seguridad
     """
-    def __init__(self, name: str, motor_ids=None, node=None, robot_name: str = "", hardware_manager=None):
+    def __init__(self, name: str, motor_ids=None, node=None, hardware_manager=None):
         super().__init__(name)
         self.node = node
-        self.robot_name = robot_name
         self.running = False
         self.own_node = False
         
@@ -83,11 +82,6 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         # Publisher para debugging (opcional)
         self.publish_goal_iq = False
         self.goal_iq_publisher = None
-
-    def _get_topic_name(self, topic_name):
-        if self.robot_name:
-            return f'/{self.robot_name}/{topic_name.lstrip("/")}'
-        return topic_name
 
     def setup(self, timeout_sec=None, **kwargs) -> bool:
         """Configurar el comportamiento según parámetros ROS2"""

@@ -6,7 +6,7 @@ from pybear import Manager
 import numpy as np
 
 class EnableRobot(py_trees.behaviour.Behaviour):
-    def __init__(self, name, motor_ids, node, robot_name: str = "", hardware_manager=None):
+    def __init__(self, name, motor_ids, node, hardware_manager=None):
         """
         Inicializar el comportamiento.
         
@@ -19,7 +19,6 @@ class EnableRobot(py_trees.behaviour.Behaviour):
         super(EnableRobot, self).__init__(name)
         self.motor_ids = motor_ids
         self.node = node
-        self.robot_name = robot_name
         self.logger = self.node.get_logger()
         self.hardware_manager = hardware_manager
         
@@ -28,11 +27,6 @@ class EnableRobot(py_trees.behaviour.Behaviour):
         self.error = False
         self.available_motors = []
 
-    def _get_topic_name(self, topic_name):
-        if self.robot_name:
-            return f'/{self.robot_name}/{topic_name.lstrip("/")}'
-        return topic_name
-        
     def setup(self, **kwargs):
         """
         Configuración inicial del comportamiento.

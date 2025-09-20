@@ -154,45 +154,41 @@ def state_command_callback(msg, node):
 def main():
     rclpy.init()
     
-    # Temporary node to get robot_name
-    temp_node = rclpy.create_node('temp_state_machine_parser')
-    temp_node.declare_parameter('robot_name', '')
-    robot_name = temp_node.get_parameter('robot_name').value
-    temp_node.destroy_node()
+    # El nombre del nodo se establece en el launch file.
+    # El namespace se aplica automáticamente desde la línea de comandos (ej: __ns:=/operador)
+    node = Node('state_machine_node')
 
-    node_name = 'state_machine_node'
-    if robot_name:
-        node_name = f'{robot_name}_{node_name}'
-
-    node = Node(node_name)
-
-    node.declare_parameter('robot_name', '')
-    robot_name = node.get_parameter('robot_name').value
-
-    def get_topic_name(topic_name):
-        if robot_name:
-            return f'/{robot_name}/{topic_name.lstrip("/")}'
-        return topic_name
-
-    # Crear suscriptor para recibir comandos de estado
+    # El namespace del nodo se aplica automáticamente a los topics.
     state_command_sub = node.create_subscription(
         String,
-        get_topic_name('state_command'),
+        'state_command',
         lambda msg: state_command_callback(msg, node),
         10
     )
 
     # Añadir una pausa para asegurar que ROS está inicializado
     time.sleep(2.0)
+
+    # Declarar y obtener los parámetros del hardware manager.
+    # Los valores por defecto se usan si no se encuentran en el yaml.
+    node.declare_parameter('hardware_manager.usb_ports', ['/dev/ttyUSB0'])
+    node.declare_parameter('hardware_manager.baudrate', 8000000)
+    node.declare_parameter('hardware_manager.auto_detect', True)
+    node.declare_parameter('hardware_manager.debug', False)
+
+    usb_ports = node.get_parameter('hardware_manager.usb_ports').value
+    baudrate = node.get_parameter('hardware_manager.baudrate').value
+    auto_detect = node.get_parameter('hardware_manager.auto_detect').value
+    debug = node.get_parameter('hardware_manager.debug').value
     
     # Inicializar hardware manager robusto
     node.get_logger().info("Inicializando hardware manager robusto...")
     hardware_manager = HardwareManager(
         node=node,
-        usb_ports=['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyUSB2', '/dev/ttyUSB3'],
-        baudrate=8000000,
-        auto_detect=True,
-        debug=False
+        usb_ports=usb_ports,
+        baudrate=baudrate,
+        auto_detect=auto_detect,
+        debug=debug
     )
 
     # Obtener motor IDs dinámicamente desde el hardware manager
@@ -219,13 +215,13 @@ def main():
             pass
     
     idle = IdleBehavior()  # Comportamiento simple para estado idle
-    enable = EnableRobot(name="EnableRobot", motor_ids=motor_ids, node=node, robot_name=robot_name, hardware_manager=hardware_manager)
-    home = HomePosition(name="GoHome", motor_ids=motor_ids, node=node, robot_name=robot_name, hardware_manager=hardware_manager)
-    zero = ZeroPosition(name="GoZero", motor_ids=motor_ids, node=node, robot_name=robot_name, hardware_manager=hardware_manager)
-    say_hello = SayHello(name="SayHello", motor_ids=motor_ids, node=node, robot_name=robot_name, hardware_manager=hardware_manager)
-    teleoperation = LocalTeleoperation(name="LocalTeleoperation", motor_ids=motor_ids, node=node, robot_name=robot_name, hardware_manager=hardware_manager)
-    remote_teleoperation = RemoteTeleoperation(name="RemoteTeleoperation", motor_ids=motor_ids, node=node, robot_name=robot_name, hardware_manager=hardware_manager)
-    disable = DisableRobot(name="DisableRobot", motor_ids=motor_ids, node=node, robot_name=robot_name, hardware_manager=hardware_manager)
+    enable = EnableRobot(name="EnableRobot", motor_ids=motor_ids, node=node, hardware_manager=hardware_manager)
+    home = HomePosition(name="GoHome", motor_ids=motor_ids, node=node, hardware_manager=hardware_manager)
+    zero = ZeroPosition(name="GoZero", motor_ids=motor_ids, node=node, hardware_manager=hardware_manager)
+    say_hello = SayHello(name="SayHello", motor_ids=motor_ids, node=node, hardware_manager=hardware_manager)
+    teleoperation = LocalTeleoperation(name="LocalTeleoperation", motor_ids=motor_ids, node=node, hardware_manager=hardware_manager)
+    remote_teleoperation = RemoteTeleoperation(name="RemoteTeleoperation", motor_ids=motor_ids, node=node, hardware_manager=hardware_manager)
+    disable = DisableRobot(name="DisableRobot", motor_ids=motor_ids, node=node, hardware_manager=hardware_manager)
 
     # Crear comportamiento raíz personalizado
     root = StateMachineRoot()

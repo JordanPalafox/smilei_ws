@@ -1,7 +1,17 @@
 # Archivo de configuración para los parámetros del robot SMILEi
-smilei_state_machine:
+launch_settings:
+  namespace: 'operador'
+
+state_machine_node:
   ros__parameters:
     use_sim_time: false
+
+    # Parametros del Hardware Manager
+    hardware_manager:
+      usb_ports: ['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyUSB2', '/dev/ttyUSB3']
+      baudrate: 8000000
+      auto_detect: true
+      debug: false
     
     # Límites de las articulaciones (en radianes)
     joint_limits:
@@ -70,7 +80,7 @@ smilei_state_machine:
 # Configuración global para todos los nodos del proceso
 /**:
   ros__parameters:
-    robot_name: 'operador'  # Nombre del robot
+    
     
     # Configuración para teleoperación remota
     remote_teleoperation:

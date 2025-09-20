@@ -4,11 +4,10 @@ import time
 
 class HomePosition(py_trees.behaviour.Behaviour):
     """Behaviour that moves all joints to home position with gradual interpolation"""
-    def __init__(self, name: str, motor_ids: list[int], node=None, robot_name: str = "", hardware_manager=None):
+    def __init__(self, name: str, motor_ids: list[int], node=None, hardware_manager=None):
         super().__init__(name)
         self.motor_ids = motor_ids
         self.node = node
-        self.robot_name = robot_name
         self.hardware_manager = hardware_manager
         self.available_motors = []
         

@@ -7,11 +7,10 @@ from pybear import Manager
 
 class SayHello(py_trees.behaviour.Behaviour):
     """Comportamiento que mueve los motores en un patrón sinusoidal."""
-    def __init__(self, name: str, motor_ids: list[int], node=None, robot_name: str = "", hardware_manager=None):
+    def __init__(self, name: str, motor_ids: list[int], node=None, hardware_manager=None):
         super().__init__(name)
         self.motor_ids = motor_ids
         self.node = node
-        self.robot_name = robot_name
         self.running = False
         self.own_node = False
         self.last_time = time.time()
@@ -19,11 +18,6 @@ class SayHello(py_trees.behaviour.Behaviour):
         
         # Use hardware manager instead of direct Pybear
         self.hardware_manager = hardware_manager
-
-    def _get_topic_name(self, topic_name):
-        if self.robot_name:
-            return f'/{self.robot_name}/{topic_name.lstrip("/")}'
-        return topic_name
 
     def setup(self, timeout_sec=None, **kwargs) -> bool:
         # Usar el nodo proporcionado en lugar de crear uno nuevo

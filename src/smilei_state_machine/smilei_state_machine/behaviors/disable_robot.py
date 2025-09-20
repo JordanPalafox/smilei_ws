@@ -4,11 +4,10 @@ import rclpy
 
 class DisableRobot(py_trees.behaviour.Behaviour):
     """Comportamiento que deshabilita los motores y los pone en un estado seguro"""
-    def __init__(self, name: str, motor_ids: list[int], node=None, robot_name: str = "", hardware_manager=None):
+    def __init__(self, name: str, motor_ids: list[int], node=None, hardware_manager=None):
         super().__init__(name)
         self.motor_ids = motor_ids
         self.node = node
-        self.robot_name = robot_name
         self.flag = True
         self.own_node = False
         
@@ -16,11 +15,6 @@ class DisableRobot(py_trees.behaviour.Behaviour):
         self.hardware_manager = hardware_manager
         self.available_motors = []
 
-    def _get_topic_name(self, topic_name):
-        if self.robot_name:
-            return f'/{self.robot_name}/{topic_name.lstrip("/")}'
-        return topic_name
-        
     def setup(self, timeout_sec=None, **kwargs) -> bool:
         # Usar el nodo proporcionado en lugar de crear uno nuevo
         if self.node is None:

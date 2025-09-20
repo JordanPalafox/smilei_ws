@@ -7,11 +7,10 @@ import select
 
 class LocalTeleoperation(py_trees.behaviour.Behaviour):
     """Comportamiento simplificado de teleoperación local para motores configurables"""
-    def __init__(self, name: str, motor_ids=None, node=None, robot_name: str = "", hardware_manager=None):
+    def __init__(self, name: str, motor_ids=None, node=None, hardware_manager=None):
         super().__init__(name)
         self.motor_ids = motor_ids if motor_ids is not None else [1, 6]  # Motores configurables, por defecto [1, 6]
         self.node = node
-        self.robot_name = robot_name
         self.running = False
         self.own_node = False
         
@@ -32,11 +31,6 @@ class LocalTeleoperation(py_trees.behaviour.Behaviour):
         # Variables para manejo de errores de comunicación
         self.communication_error_count = 0
         self.max_communication_errors = 10  # Máximo número de errores antes de salir
-
-    def _get_topic_name(self, topic_name):
-        if self.robot_name:
-            return f'/{self.robot_name}/{topic_name.lstrip("/")}'
-        return topic_name
 
     def setup(self, timeout_sec=None, **kwargs) -> bool:
         # Usar el nodo proporcionado en lugar de crear uno nuevo
