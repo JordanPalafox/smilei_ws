@@ -1,9 +1,8 @@
 # Archivo de configuración para los parámetros del robot SMILEi
-launch_settings:
-  namespace: 'operador'
-
 state_machine_node:
   ros__parameters:
+    # Namespace para el lanzamiento, leído por el archivo launch.
+    launch_namespace: 'operador'
     use_sim_time: false
 
     # Parametros del Hardware Manager
