@@ -13,7 +13,7 @@ tmux new-session -d -s $SESSION_NAME -n "ROS"
 # --- Panel 0 (Superior): Máquina de Estados ---
 # El objetivo es sesion:ventana.panel -> ros2_smilei:0.0
 PANE_0_TARGET="${SESSION_NAME}:0.0"
-tmux send-keys -t $PANE_0_TARGET "cd smilei_ws" C-m
+tmux send-keys -t $PANE_0_TARGET "cd ~/smilei_ws" C-m
 tmux send-keys -t $PANE_0_TARGET "source install/setup.bash" C-m
 tmux send-keys -t $PANE_0_TARGET "echo '🚀 Lanzando la máquina de estados...'" C-m
 tmux send-keys -t $PANE_0_TARGET "ros2 launch smilei_state_machine state_machine.launch.py" C-m
@@ -30,7 +30,7 @@ sleep 2
 PANE_1_TARGET="${SESSION_NAME}:0.1"
 
 # Enviar comandos al nuevo panel (ahora con el objetivo correcto)
-tmux send-keys -t $PANE_1_TARGET "cd smilei_ws" C-m
+tmux send-keys -t $PANE_1_TARGET "cd ~/smilei_ws" C-m
 tmux send-keys -t $PANE_1_TARGET "source install/setup.bash" C-m
 tmux send-keys -t $PANE_1_TARGET "echo '⏳ Esperando 3s a que la máquina de estados inicie...'; sleep 3; clear" C-m
 
