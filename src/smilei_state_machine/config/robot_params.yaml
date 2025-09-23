@@ -4,6 +4,7 @@ state_machine_node:
     # Namespace para el lanzamiento, leído por el archivo launch.
     launch_namespace: 'operador'
     use_sim_time: false
+    debug: false  # Habilita logs de tiempo y frecuencia para la máquina de estados
 
     # Parametros del Hardware Manager
     hardware_manager:
@@ -87,6 +88,8 @@ state_machine_node:
       is_machine_a: true              # true para máquina A, false para máquina B
       machine_a_ip: '192.168.0.100'   # IP de la máquina A
       machine_b_ip: '192.168.0.2'   # IP de la máquina B
+      debug_udp_latency: false         # Habilita logs de estadísticas de latencia UDP
+      debug_pd_control: false         # Habilita logs de la corriente de control PD
       
       # Configuración de motores
       motor_ids: [1,2,3,4,5,6,7,8]                  # Lista de IDs de motores a controlar

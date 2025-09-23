@@ -83,6 +83,15 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         self.publish_goal_iq = False
         self.goal_iq_publisher = None
 
+        # Debugging
+        self.debug_udp_latency = False
+        self.debug_pd_control = False
+        self.last_packet_time = None
+        # Atributos para resumen de latencia simplificado
+        self.latency_sum = 0.0
+        self.latency_packet_count = 0
+        self.last_latency_log_time = 0.0
+
     def setup(self, timeout_sec=None, **kwargs) -> bool:
         """Configurar el comportamiento según parámetros ROS2"""
         if self.node is None:
@@ -100,6 +109,8 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.node.declare_parameter('remote_teleoperation.machine_a_ip', '192.168.0.144')
             self.node.declare_parameter('remote_teleoperation.machine_b_ip', '192.168.0.2')
             self.node.declare_parameter('remote_teleoperation.max_total_motors', 8)  # Máximo de motores en el sistema
+            self.node.declare_parameter('remote_teleoperation.debug_udp_latency', False)
+            self.node.declare_parameter('remote_teleoperation.debug_pd_control', False)
             
             # Cargar parámetros
             param_motor_ids = self.node.get_parameter('remote_teleoperation.motor_ids').value
@@ -108,6 +119,12 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.machine_a_ip = self.node.get_parameter('remote_teleoperation.machine_a_ip').value
             self.machine_b_ip = self.node.get_parameter('remote_teleoperation.machine_b_ip').value
             self.max_total_motors = self.node.get_parameter('remote_teleoperation.max_total_motors').value
+            self.debug_udp_latency = self.node.get_parameter('remote_teleoperation.debug_udp_latency').value
+            self.debug_pd_control = self.node.get_parameter('remote_teleoperation.debug_pd_control').value
+            if self.debug_udp_latency:
+                self.node.get_logger().info("Depuración de latencia UDP ACTIVADA.")
+            if self.debug_pd_control:
+                self.node.get_logger().info("Depuración de control PD ACTIVADA.")
             
             # Obtener motores disponibles del hardware manager
             if self.hardware_manager:
@@ -364,6 +381,32 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         
         try:
             data, addr = self.receive_socket.recvfrom(1024)
+
+            if self.debug_udp_latency:
+                current_time = time.time()
+                if self.last_packet_time is not None:
+                    time_diff_ms = (current_time - self.last_packet_time) * 1000
+                    self.latency_sum += time_diff_ms
+                    self.latency_packet_count += 1
+                
+                self.last_packet_time = current_time
+
+                # Loguear resumen de estadísticas cada segundo
+                if current_time - self.last_latency_log_time >= 1.0:
+                    if self.latency_packet_count > 0:
+                        avg_latency = self.latency_sum / self.latency_packet_count
+                        
+                        self.node.get_logger().info(
+                            f"UDP Stats (último seg): "
+                            f"Latencia avg={avg_latency:.2f}ms | "
+                            f"Paquetes={self.latency_packet_count}/s"
+                        )
+                        
+                        # Resetear estadísticas
+                        self.latency_sum = 0.0
+                        self.latency_packet_count = 0
+                    
+                    self.last_latency_log_time = current_time
             
             # Calcular número de floats recibidos basado en tamaño de datos
             num_floats = len(data) // 4  # Cada float son 4 bytes
@@ -390,6 +433,9 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                     self.node.get_logger().info(f"UDP RX [{machine}] <- {addr}: todas posiciones en 0")
                 
         except socket.timeout:
+            if self.debug_udp_latency:
+                self.last_packet_time = None # Reset timer on timeout
+
             # Timeout normal - no hacer nada, pero contar para debug
             if not hasattr(self, '_timeout_count'):
                 self._timeout_count = 0
@@ -564,7 +610,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 self._current_log_count = 0
             self._current_log_count += 1
             
-            if self._current_log_count % 50 == 0:
+            if self.debug_pd_control and self._current_log_count % 50 == 0:
                 machine = 'A' if self.is_machine_a else 'B'
                 # Mostrar información de cada motor por separado
                 for i, motor_id in enumerate(self.motor_ids):
@@ -663,6 +709,12 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         # Inicializar estimadores de velocidad (del pd_control_node.py)
         self.theta_estimators = [0.0] * len(self.motor_ids)
         self.vel_estimators = [0.0] * len(self.motor_ids)
+
+        # Resetear estadísticas de latencia
+        if self.debug_udp_latency:
+            self.latency_sum = 0.0
+            self.latency_packet_count = 0
+            self.last_latency_log_time = time.time()
         
         self.node.get_logger().info(f"Teleoperación iniciada - Máquina {'A' if self.is_machine_a else 'B'}")
         self.node.get_logger().info(f"Local: {self.local_ip}:{self.receive_port} -> Remoto: {self.local_addr}")

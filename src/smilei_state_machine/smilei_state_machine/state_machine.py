@@ -24,11 +24,26 @@ class StateMachineRoot(py_trees.behaviour.Behaviour):
         self.current_behavior = None
         self.node = None
         self.behaviors_setup_done = False
+        # Atributos para depuración de tiempo
+        self.sm_debug = False
+        self.last_log_time = 0.0
+        self.tick_count = 0
+        self.last_tick_time = 0.0
+        # Atributo para limitar logs de éxito
+        self.last_success_log_time = {}
     
     def setup_with_node(self, node):
         self.node = node
         # No configuramos los comportamientos aquí, lo haremos en la primera actualización
         # cuando ROS esté completamente inicializado
+
+        # Leer el parámetro de depuración
+        self.node.declare_parameter('debug', False)
+        self.sm_debug = self.node.get_parameter('debug').value
+        if self.sm_debug:
+            self.node.get_logger().info("Depuración de tiempo de la máquina de estados HABILITADA.")
+            self.last_log_time = time.time()
+            self.last_tick_time = time.time()
     
     def add_state(self, state_name, behavior):
         self.state_behaviors[state_name] = behavior
@@ -79,6 +94,8 @@ class StateMachineRoot(py_trees.behaviour.Behaviour):
     def update(self):
         global current_state_command, last_completed_state
         
+        start_time = time.time()
+
         # Configurar todos los comportamientos si no lo hemos hecho ya
         if not self.behaviors_setup_done:
             self.setup_all_behaviors()
@@ -119,8 +136,29 @@ class StateMachineRoot(py_trees.behaviour.Behaviour):
             # Si el comportamiento completó con éxito, registrarlo
             if status == py_trees.common.Status.SUCCESS:
                 last_completed_state = current_state_command
-                if self.node:
+                
+                current_time = time.time()
+                last_log_time_for_state = self.last_success_log_time.get(current_state_command, 0.0)
+
+                # Limitar el log a una vez cada 0.5 segundos por estado
+                if self.node and (current_time - last_log_time_for_state > 0.5):
                     self.node.get_logger().info(f"Estado {current_state_command} completado con éxito")
+                    self.last_success_log_time[current_state_command] = current_time
+
+            # Lógica de depuración de tiempo
+            if self.sm_debug and self.node:
+                iteration_time_ms = (time.time() - start_time) * 1000
+                self.tick_count += 1
+                current_time = time.time()
+                delta_time = current_time - self.last_log_time
+                
+                if delta_time >= 1.0:
+                    frequency = self.tick_count / delta_time
+                    self.node.get_logger().info(
+                        f"[DEBUG] Frecuencia SM: {frequency:.2f} Hz | Tiempo de iteración: {iteration_time_ms:.3f} ms"
+                    )
+                    self.tick_count = 0
+                    self.last_log_time = current_time
             
             return py_trees.common.Status.RUNNING  # La máquina de estados siempre está ejecutándose
         except Exception as e:

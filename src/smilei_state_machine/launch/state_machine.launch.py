@@ -16,33 +16,27 @@ def generate_launch_description():
     default_params_file = os.path.join(pkg_dir, 'config', 'robot_params.yaml')
     
     # --- Cargar configuraciones desde YAML ---
-    # Se abre y parsea el archivo YAML para leer el namespace de lanzamiento.
-    # El archivo de parámetros completo se pasará al nodo directamente.
     with open(default_params_file, 'r') as f:
         config_data = yaml.safe_load(f)
     
-    # Extraer el namespace desde los parámetros del nodo, con un valor de respaldo.
+    # Extraer el namespace
     launch_namespace = config_data.get('state_machine_node', {}).get('ros__parameters', {}).get('launch_namespace', 'operador')
 
-    # --- Declarar Argumentos de Lanzamiento ---
+    # Extraer los parámetros para pasarlos como un diccionario
+    state_machine_params = config_data.get('state_machine_node', {}).get('ros__parameters', {})
+    global_params = config_data.get('/**', {}).get('ros__parameters', {})
     
-    # Argumento para el namespace, usando el valor del YAML como predeterminado.
+    # Combinar los parámetros. Los específicos del nodo sobreescriben los globales.
+    combined_params = {**global_params, **state_machine_params}
+
+    # --- Declarar Argumentos de Lanzamiento ---
     namespace_arg = DeclareLaunchArgument(
         'namespace',
         default_value=launch_namespace,
-        description='Namespace to apply to the nodes. Default is read from the params file.'
-    )
-
-    # Argumento para el archivo de parámetros, que se pasará al nodo.
-    params_file_arg = DeclareLaunchArgument(
-        'params_file',
-        default_value=default_params_file,
-        description='Path to the robot parameters file'
+        description='Namespace to apply to the nodes.'
     )
 
     # --- Configuración de Nodo y Namespace ---
-    
-    # Usar un GroupAction para aplicar el namespace al nodo
     namespaced_group = GroupAction(
         actions=[
             PushRosNamespace(LaunchConfiguration('namespace')),
@@ -50,9 +44,8 @@ def generate_launch_description():
                 package='smilei_state_machine',
                 executable='state_machine',
                 name='state_machine_node',
-                # Pasar la RUTA al archivo de parámetros. ROS2 se encargará de parsear
-                # las secciones '/**' y específicas del nodo correctamente.
-                parameters=[LaunchConfiguration('params_file')],
+                # Pasar los parámetros como un diccionario combinado para asegurar la carga
+                parameters=[combined_params],
                 output='screen',
                 emulate_tty=True
             )
@@ -61,6 +54,5 @@ def generate_launch_description():
     
     return LaunchDescription([
         namespace_arg,
-        params_file_arg,
         namespaced_group
     ])
