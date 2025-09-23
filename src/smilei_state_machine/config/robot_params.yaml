@@ -1,7 +1,17 @@
 # Archivo de configuración para los parámetros del robot SMILEi
-smilei_state_machine:
+state_machine_node:
   ros__parameters:
+    # Namespace para el lanzamiento, leído por el archivo launch.
+    launch_namespace: 'operador'
     use_sim_time: false
+    debug: false  # Habilita logs de tiempo y frecuencia para la máquina de estados
+
+    # Parametros del Hardware Manager
+    hardware_manager:
+      usb_ports: ['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyUSB2', '/dev/ttyUSB3']
+      baudrate: 8000000
+      auto_detect: true
+      debug: false
     
     # Límites de las articulaciones (en radianes)
     joint_limits:
@@ -67,26 +77,30 @@ smilei_state_machine:
       # Gravedad
       g: 9.81
 
-# Configuración específica para el nodo state_machine_node
-state_machine_node:
+# Configuración global para todos los nodos del proceso
+/**:
   ros__parameters:
+    
+    
     # Configuración para teleoperación remota
     remote_teleoperation:
       # Configuración de red
       is_machine_a: true              # true para máquina A, false para máquina B
-      machine_a_ip: '192.168.4.241'   # IP de la máquina A
-      machine_b_ip: '192.168.4.238'   # IP de la máquina B
+      machine_a_ip: '192.168.0.100'   # IP de la máquina A
+      machine_b_ip: '192.168.0.2'   # IP de la máquina B
+      debug_udp_latency: false         # Habilita logs de estadísticas de latencia UDP
+      debug_pd_control: false         # Habilita logs de la corriente de control PD
       
       # Configuración de motores
-      motor_ids: [1]                  # Lista de IDs de motores a controlar
+      motor_ids: [1,2,3,4,5,6,7,8]                  # Lista de IDs de motores a controlar
       
       # Ganancias de control PD para teleoperación (valores fijos del behavior)
       control_gains:
-        kp: 1.75  # Ganancia proporcional fija
-        kd: 0.1   # Ganancia derivativa fija
+        kp: 0.2  # Ganancia proporcional fija
+        kd: 0.01   # Ganancia derivativa fija
         kt: 0.35  # Constante de torque fija
       
-      # Configuración de comunicación
+      # Config0uración de comunicación
       socket_timeout: 0.001
       max_communication_errors: 10
-      control_frequency: 1000
+      control_frequency: 10000

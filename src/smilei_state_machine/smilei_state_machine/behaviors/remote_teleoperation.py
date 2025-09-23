@@ -2,534 +2,824 @@ import py_trees
 import rclpy
 import time
 import sys
-import select
 import socket
 import struct
 import threading
 import numpy as np
-from westwood_motor_interfaces.srv import (
-    SetMotorIdAndTarget, GetMotorPositions, GetMotorVelocities,
-    SetMode, SetTorqueEnable, SetGoalIq
-)
+import math
+from std_msgs.msg import Float64MultiArray
 
 
 class RemoteTeleoperation(py_trees.behaviour.Behaviour):
     """
-    Comportamiento de teleoperación remota que permite que motores en diferentes 
-    computadoras se repliquen mutuamente a través de comunicación UDP.
-    
-    Basado en el código original de teleoperación remota de main.py
+    Comportamiento de teleoperación remota basado exactamente en el código de referencia main.py
+    Implementa control bilateral con compensación de gravedad y límites de seguridad
     """
-    def __init__(self, name: str, motor_ids=None, node=None):
+    def __init__(self, name: str, motor_ids=None, node=None, hardware_manager=None):
         super().__init__(name)
         self.node = node
         self.running = False
         self.own_node = False
         
-        # Configuración desde parámetros ROS2 (se carga en setup)
+        # Hardware manager para control de motores
+        self.hardware_manager = hardware_manager
+        self.available_motors = []
+        self.all_system_motors = []
+        
+        # Configuración de red (se carga desde parámetros ROS2)
         self.motor_ids = None
+        self.is_machine_a = None
+        self.machine_a_ip = None
+        self.machine_b_ip = None
         self.local_ip = None
-        self.remote_ip = None  
+        self.remote_ip = None
         self.send_port = None
         self.receive_port = None
-        self.socket_timeout = 0.001
-        self.max_communication_errors = 10
-        self.control_frequency = 1000
-        
+        self.local_addr = None
         
         # Sockets UDP
         self.send_socket = None
         self.receive_socket = None
         
-        # Datos de comunicación
+        # Control bilateral
         self.received_data = []
         self.data_lock = threading.Lock()
         
-        # Clientes para servicios ROS2
-        self.set_position_client = None
-        self.get_position_client = None
-        self.get_velocity_client = None
-        self.set_mode_client = None
-        self.set_torque_client = None
-        self.set_iq_client = None
+        # Ganancias de control PD - usando los valores del nodo PD que funciona
+        self.kp = 1.0        # Proportional gain (del pd_control_node.py) - default para todos excepto motor 7
+        self.kp_motor7 = 0.5  # Proportional gain específica para motor 7
+        self.kd = 0.1        # Damping gain (del pd_control_node.py)
         
-        # Variables para control (se inicializan después de cargar parámetros)
-        self.current_positions = []
-        self.current_velocities = []
-        self.target_positions = []
+        # Parámetros del control PD no lineal (del pd_control_node.py)
+        self.r1 = 0.4
+        self.r2 = 0.3
+        self.p1 = (2*self.r2 - self.r1) / self.r1
+        self.p2 = (2*self.r2 - self.r1) / self.r2
         
-        # Variables para manejo de errores
+        # Estimador de velocidad (del pd_control_node.py)
+        self.Fc = 35         # Frequency cutoff
+        self.Tl = 0.002      # Loop frequency
+        
+        # Variables del estimador de velocidad
+        self.theta_estimators = []  # Se inicializa por motor
+        self.vel_estimators = []    # Se inicializa por motor
+        self.Kt = 0.35                      # Constante de torque
+        
+        # Límites de seguridad
+        self.max_current = 5.0              # Límite máximo de corriente (A)
+        self.error_deadband = 0.05          # Zona muerta para errores pequeños (rad)
+        self.max_error = 1.57               # Error máximo permitido (π/2 rad)
+        
+        # Variables de estado de motores
+        self.current_positions = [0.0] * 8
+        self.current_velocities = [0.0] * 8
+        self.target_positions = [0.0] * 8
+        
+        # Variables de comunicación
         self.communication_error_count = 0
+        self.max_communication_errors = 10
+        
+        # Publisher para debugging (opcional)
+        self.publish_goal_iq = False
+        self.goal_iq_publisher = None
+
+        # Debugging
+        self.debug_udp_latency = False
+        self.debug_pd_control = False
+        self.last_packet_time = None
+        # Atributos para resumen de latencia simplificado
+        self.latency_sum = 0.0
+        self.latency_packet_count = 0
+        self.last_latency_log_time = 0.0
 
     def setup(self, timeout_sec=None, **kwargs) -> bool:
-        """Configurar el comportamiento"""
+        """Configurar el comportamiento según parámetros ROS2"""
         if self.node is None:
             self.node = rclpy.create_node('remote_teleoperation_client')
             self.own_node = True
         else:
             self.own_node = False
         
-        # Declarar y cargar parámetros desde ROS2
         try:
-            # Declarar parámetros de teleoperación remota
-            self.node.declare_parameter('remote_teleoperation.motor_ids', [1])
+            # Declarar parámetros - configuración flexible para número de motores
+            # Usar lista de enteros por defecto para evitar problemas de tipos
+            self.node.declare_parameter('remote_teleoperation.motor_ids', [1, 2])  # Por defecto motores 1 y 2
+            self.node.declare_parameter('remote_teleoperation.use_all_motors', False)  # True = usar todos los motores disponibles
             self.node.declare_parameter('remote_teleoperation.is_machine_a', True)
-            self.node.declare_parameter('remote_teleoperation.machine_a_ip', '192.168.4.241')
-            self.node.declare_parameter('remote_teleoperation.machine_b_ip', '192.168.4.238')
-            self.node.declare_parameter('remote_teleoperation.socket_timeout', 0.001)
-            self.node.declare_parameter('remote_teleoperation.max_communication_errors', 10)
-            self.node.declare_parameter('remote_teleoperation.control_frequency', 1000)
-            self.node.declare_parameter('remote_teleoperation.control_gains.kp', 1.75)
-            self.node.declare_parameter('remote_teleoperation.control_gains.kd', 0.1)
-            self.node.declare_parameter('remote_teleoperation.control_gains.kt', 0.35)
+            self.node.declare_parameter('remote_teleoperation.machine_a_ip', '192.168.0.144')
+            self.node.declare_parameter('remote_teleoperation.machine_b_ip', '192.168.0.2')
+            self.node.declare_parameter('remote_teleoperation.max_total_motors', 8)  # Máximo de motores en el sistema
+            self.node.declare_parameter('remote_teleoperation.debug_udp_latency', False)
+            self.node.declare_parameter('remote_teleoperation.debug_pd_control', False)
             
+            # Cargar parámetros
+            param_motor_ids = self.node.get_parameter('remote_teleoperation.motor_ids').value
+            use_all_motors = self.node.get_parameter('remote_teleoperation.use_all_motors').value
+            self.is_machine_a = self.node.get_parameter('remote_teleoperation.is_machine_a').value
+            self.machine_a_ip = self.node.get_parameter('remote_teleoperation.machine_a_ip').value
+            self.machine_b_ip = self.node.get_parameter('remote_teleoperation.machine_b_ip').value
+            self.max_total_motors = self.node.get_parameter('remote_teleoperation.max_total_motors').value
+            self.debug_udp_latency = self.node.get_parameter('remote_teleoperation.debug_udp_latency').value
+            self.debug_pd_control = self.node.get_parameter('remote_teleoperation.debug_pd_control').value
+            if self.debug_udp_latency:
+                self.node.get_logger().info("Depuración de latencia UDP ACTIVADA.")
+            if self.debug_pd_control:
+                self.node.get_logger().info("Depuración de control PD ACTIVADA.")
             
-            # Cargar valores de parámetros
-            self.motor_ids = self.node.get_parameter('remote_teleoperation.motor_ids').value
-            is_machine_a = self.node.get_parameter('remote_teleoperation.is_machine_a').value
-            machine_a_ip = self.node.get_parameter('remote_teleoperation.machine_a_ip').value
-            machine_b_ip = self.node.get_parameter('remote_teleoperation.machine_b_ip').value
-            self.socket_timeout = self.node.get_parameter('remote_teleoperation.socket_timeout').value
-            self.max_communication_errors = self.node.get_parameter('remote_teleoperation.max_communication_errors').value
-            self.control_frequency = self.node.get_parameter('remote_teleoperation.control_frequency').value
-            self.kp = self.node.get_parameter('remote_teleoperation.control_gains.kp').value
-            self.kd = self.node.get_parameter('remote_teleoperation.control_gains.kd').value
-            self.kt = self.node.get_parameter('remote_teleoperation.control_gains.kt').value
-            
-            
-            
-            # Configurar IPs y puertos basado en qué máquina somos
-            if is_machine_a:
-                self.local_ip = machine_a_ip
-                self.remote_ip = machine_b_ip
-                self.send_port = 4000      # Máquina A envía al puerto 4000
-                self.receive_port = 5001   # Máquina A recibe en puerto 5001
+            # Obtener motores disponibles del hardware manager
+            if self.hardware_manager:
+                available_motors = self.hardware_manager.get_available_motors()
+                if use_all_motors:
+                    # Usar todos los motores disponibles
+                    self.motor_ids = available_motors
+                    self.node.get_logger().info(f"Usando TODOS los motores disponibles: {available_motors}")
+                else:
+                    # Usar solo los motores especificados que están disponibles
+                    self.motor_ids = [m for m in param_motor_ids if m in available_motors]
+                    self.node.get_logger().info(f"Usando motores especificados: {self.motor_ids} (disponibles: {available_motors})")
+                
+                self.all_system_motors = available_motors
+                self.num_total_motors = len(available_motors)
             else:
-                self.local_ip = machine_b_ip
-                self.remote_ip = machine_a_ip
-                self.send_port = 5001      # Máquina B envía al puerto 5001
-                self.receive_port = 4000   # Máquina B recibe en puerto 4000
+                # Sin hardware manager, usar parámetros
+                self.motor_ids = param_motor_ids
+                self.all_system_motors = self.motor_ids
+                self.num_total_motors = len(self.motor_ids)
+                self.node.get_logger().warning(f"Sin hardware manager - usando motores de parámetros: {self.motor_ids}")
             
-            # Inicializar variables de control
+            # Configurar red según máquina (basado en código de referencia)
+            if self.is_machine_a:
+                # Máquina A configuración
+                self.local_ip = self.machine_a_ip
+                self.remote_ip = self.machine_b_ip
+                self.send_port = 4000    # Puerto usado para enviar (no importa mucho)
+                self.receive_port = 5005 # A recibe en puerto 5005
+                self.local_addr = (self.remote_ip, 4000)  # A envía a puerto 4000 de B
+            else:
+                # Máquina B configuración  
+                self.local_ip = self.machine_b_ip
+                self.remote_ip = self.machine_a_ip
+                self.send_port = 5005    # Puerto usado para enviar (no importa mucho)
+                self.receive_port = 4000 # B recibe en puerto 4000
+                self.local_addr = (self.remote_ip, 5005)  # B envía a puerto 5005 de A
+            
+            # Inicializar variables de control basadas en número total de motores
+            self.node.get_logger().info(f"Configuración: {len(self.motor_ids)} motor(es) local(es), {self.num_total_motors} total en sistema")
+            self.node.get_logger().info(f"Motores locales: {self.motor_ids}")
+            self.node.get_logger().info(f"Todos los motores del sistema: {self.all_system_motors}")
+            
+            # Inicializar arrays con tamaño correcto
+            # current_positions/velocities: solo para motores locales
             self.current_positions = [0.0] * len(self.motor_ids)
             self.current_velocities = [0.0] * len(self.motor_ids)
-            self.target_positions = [0.0] * len(self.motor_ids)
-            
-            self.node.get_logger().info(f"Configuración cargada: Motors={self.motor_ids}, IP={self.local_ip}→{self.remote_ip}")
+            # target_positions: para todo el sistema
+            self.target_positions = [0.0] * self.num_total_motors
             
         except Exception as e:
             self.node.get_logger().error(f"Error cargando parámetros: {str(e)}")
             return False
         
-        # Crear clientes para servicios
-        self.set_position_client = self.node.create_client(
-            SetMotorIdAndTarget, 'westwood_motor/set_motor_id_and_target')
-        self.get_position_client = self.node.create_client(
-            GetMotorPositions, 'westwood_motor/get_motor_positions')
-        self.get_velocity_client = self.node.create_client(
-            GetMotorVelocities, 'westwood_motor/get_motor_velocities')
-        self.set_mode_client = self.node.create_client(
-            SetMode, 'westwood_motor/set_mode')
-        self.set_torque_client = self.node.create_client(
-            SetTorqueEnable, 'westwood_motor/set_torque_enable')
-        self.set_iq_client = self.node.create_client(
-            SetGoalIq, 'westwood_motor/set_goal_iq')
+        # Verificar hardware
+        if self.hardware_manager is not None:
+            # Los motores ya fueron configurados arriba, solo verificar conexión
+            self.available_motors = [m for m in self.motor_ids if m in self.all_system_motors]
+            if self.available_motors:
+                self.node.get_logger().info(f"Hardware conectado - motores disponibles para teleoperación: {self.available_motors}")
+            else:
+                self.node.get_logger().warning("No hay motores disponibles - modo simulación")
+        else:
+            self.node.get_logger().warning("Hardware manager no disponible - modo simulación")
         
-        if timeout_sec is None:
-            timeout_sec = 1.0
-        
-        # Esperar por servicios
-        services_ready = True
-        for client, name in [
-            (self.set_position_client, 'set_motor_id_and_target'),
-            (self.get_position_client, 'get_motor_positions'),
-            (self.get_velocity_client, 'get_motor_velocities'),
-            (self.set_iq_client, 'set_goal_iq')
-        ]:
-            if not client.wait_for_service(timeout_sec=timeout_sec):
-                self.node.get_logger().warning(f"Servicio {name} no disponible")
-                services_ready = False
-        
-        return services_ready
+        return True
 
     def setup_udp_communication(self):
-        """Configurar sockets UDP para comunicación remota"""
+        """Configurar sockets UDP como en el código de referencia"""
         try:
-            # Socket para enviar datos (no necesita bind específico)
+            # Socket para enviar (servidor) - no requiere bind específico
             self.send_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.send_socket.settimeout(self.socket_timeout)
+            # Para máquina A, usar timeout más largo debido a problemas de red
+            send_timeout = 0.5 if self.is_machine_a else 0.1
+            self.send_socket.settimeout(send_timeout)  # Timeout ajustado por máquina
             
-            # Socket para recibir datos (bind en IP local en puerto de recepción)
+            # Socket para recibir (cliente) - bind en puerto local (usar 0.0.0.0 para cualquier interfaz)
             self.receive_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.receive_socket.bind((self.local_ip, self.receive_port))
-            self.receive_socket.settimeout(self.socket_timeout)
+            # Configurar opciones de socket para permitir reutilización
+            self.receive_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                self.receive_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            except AttributeError:
+                # SO_REUSEPORT no disponible en todos los sistemas
+                pass
+            self.receive_socket.bind(('0.0.0.0', self.receive_port))
+            self.receive_socket.settimeout(0.01)  # Timeout para recepción UDP
             
-            self.node.get_logger().info(f"UDP configurado: Envío hacia {self.remote_ip}:{self.send_port}, "
-                                      f"Recepción en {self.local_ip}:{self.receive_port}")
+            self.node.get_logger().info(f"=== UDP CONFIGURACIÓN ===")
+            self.node.get_logger().info(f"Máquina: {'A' if self.is_machine_a else 'B'}")
+            self.node.get_logger().info(f"Local IP: {self.local_ip}")
+            self.node.get_logger().info(f"Remoto IP: {self.remote_ip}")
+            self.node.get_logger().info(f"Puerto de recepción: {self.receive_port}")
+            self.node.get_logger().info(f"Enviando a: {self.local_addr}")
+            self.node.get_logger().info(f"Formato UDP: {self.num_total_motors} floats ({self.num_total_motors * 4} bytes)")
+            self.node.get_logger().info(f"✅ Puerto {self.receive_port} bound exitosamente")
+                
             return True
+            
         except Exception as e:
             self.node.get_logger().error(f"Error configurando UDP: {str(e)}")
             return False
 
     def zero_position(self):
-        """Envía todos los motores a posición cero"""
-        self.node.get_logger().info("Enviando motores a posición cero")
-        
-        req = SetMotorIdAndTarget.Request()
-        req.motor_ids = self.motor_ids
-        req.target_positions = [0.0] * len(self.motor_ids)
-        
+        """Envía motores a posición cero (igual que otros behaviors)"""
         try:
-            future = self.set_position_client.call_async(req)
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
-            
-            if future.done():
-                result = future.result()
-                if result.success:
-                    time.sleep(2.0)  # Esperar a que lleguen a posición
-                    return True
-                else:
-                    self.node.get_logger().warning(f"Error en zero_position: {result.message}")
-            return False
+            if self.hardware_manager:
+                position_pairs = [(motor_id, 0.0) for motor_id in self.motor_ids]
+                self.hardware_manager.set_goal_position(*position_pairs)
+                self.node.get_logger().info("Motores enviados a posición cero")
+            else:
+                self.node.get_logger().info("[SIM] Motores enviados a posición cero")
+            time.sleep(2.0)
+            return True
         except Exception as e:
             self.node.get_logger().error(f"Error en zero_position: {str(e)}")
             return False
 
     def setup_current_control(self):
-        """Configura los motores para control de corriente (modo 0)"""
-        self.node.get_logger().info(f"Configurando motores {self.motor_ids} para control de corriente")
-        
+        """Configuración de motores usando parámetros exactos del pd_control_node.py"""
         try:
-            # Configurar modo corriente (modo 0)
-            req_mode = SetMode.Request()
-            req_mode.motor_ids = self.motor_ids
-            req_mode.modes = [0] * len(self.motor_ids)  # Modo corriente
+            if not self.hardware_manager:
+                self.node.get_logger().info("[SIM] Configurando control simple")
+                return True
             
-            future = self.set_mode_client.call_async(req_mode)
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
-            
-            # Habilitar torque
-            req_torque = SetTorqueEnable.Request()
-            req_torque.motor_ids = self.motor_ids
-            req_torque.enable_torque = [True] * len(self.motor_ids)
-            
-            future = self.set_torque_client.call_async(req_torque)
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
+            if self.is_machine_a:
+                self.node.get_logger().info("Configurando MÁQUINA A: motores con corriente CERO (movimiento libre)")
+                # Máquina A: configurar motores para movimiento libre (corriente cero)
+                # Configurar PID gains para control de corriente (como pd_control_node.py)
+                for motor_id in self.motor_ids:
+                    # PID iq/id control (del pd_control_node.py líneas 98-103)
+                    self.hardware_manager.set_p_gain_iq((motor_id, 0.277))
+                    self.hardware_manager.set_i_gain_iq((motor_id, 0.061))
+                    self.hardware_manager.set_d_gain_iq((motor_id, 0))
+                    self.hardware_manager.set_p_gain_id((motor_id, 0.277))
+                    self.hardware_manager.set_i_gain_id((motor_id, 0.061))
+                    self.hardware_manager.set_d_gain_id((motor_id, 0))
+                    
+                    # Modo corriente (modo 0) como pd_control_node.py línea 116
+                    self.hardware_manager.set_mode((motor_id, 0))
+                    
+                    # Habilitar torque
+                    self.hardware_manager.set_torque_enable((motor_id, 1))
+                    
+                self.node.get_logger().info("Máquina A configurada - motores libres para teleoperar")
+                
+            else:
+                self.node.get_logger().info("Configurando MÁQUINA B: control PD activo")
+                # Máquina B: configurar para control PD activo
+                for motor_id in self.motor_ids:
+                    # PID gains exactos del pd_control_node.py
+                    self.hardware_manager.set_p_gain_iq((motor_id, 0.277))
+                    self.hardware_manager.set_i_gain_iq((motor_id, 0.061))
+                    self.hardware_manager.set_d_gain_iq((motor_id, 0))
+                    self.hardware_manager.set_p_gain_id((motor_id, 0.277))
+                    self.hardware_manager.set_i_gain_id((motor_id, 0.061))
+                    self.hardware_manager.set_d_gain_id((motor_id, 0))
+                    
+                    # Modo corriente (modo 0) como pd_control_node.py
+                    self.hardware_manager.set_mode((motor_id, 0))
+                    
+                    # Habilitar torque  
+                    self.hardware_manager.set_torque_enable((motor_id, 1))
+                
+                self.node.get_logger().info("Máquina B configurada - control PD activo")
             
             return True
+            
         except Exception as e:
-            self.node.get_logger().error(f"Error configurando control de corriente: {str(e)}")
+            self.node.get_logger().error(f"Error configurando motor: {str(e)}")
             return False
 
     def get_motor_states(self):
-        """Obtiene posiciones y velocidades actuales de todos los motores"""
+        """Obtiene posiciones y velocidades usando hardware_manager mejorado con formato pd_control_node.py"""
         try:
-            # Obtener posiciones
-            req_pos = GetMotorPositions.Request()
-            req_pos.motor_ids = self.motor_ids
+            if not self.hardware_manager:
+                # Modo simulación - mantener estados actuales
+                return True
             
-            future_pos = self.get_position_client.call_async(req_pos)
-            rclpy.spin_until_future_complete(self.node, future_pos, timeout_sec=0.1)
+            # Obtener posiciones y velocidades usando los métodos mejorados del hardware_manager
+            positions = self.hardware_manager.get_present_position(*self.motor_ids)
+            velocities = self.hardware_manager.get_present_velocity(*self.motor_ids)
             
-            if future_pos.done():
-                result_pos = future_pos.result()
-                if result_pos.success:
-                    old_pos = self.current_positions[0] if len(self.current_positions) > 0 else 0.0
-                    self.current_positions = list(result_pos.positions)
-                    
-                    # Debug si cambió la posición
-                    if abs(self.current_positions[0] - old_pos) > 0.01:
-                        self.node.get_logger().info(f"🎯 Motor posición: {self.current_positions[0]:.3f} (cambio: {self.current_positions[0] - old_pos:+.3f})")
-            
-            # Obtener velocidades
-            req_vel = GetMotorVelocities.Request()
-            req_vel.motor_ids = self.motor_ids
-            
-            future_vel = self.get_velocity_client.call_async(req_vel)
-            rclpy.spin_until_future_complete(self.node, future_vel, timeout_sec=0.1)
-            
-            if future_vel.done():
-                result_vel = future_vel.result()
-                if result_vel.success:
-                    self.current_velocities = list(result_vel.velocities)
-            
-            return True
+            # Validar que obtuvimos datos válidos
+            if len(positions) == len(self.motor_ids) and len(velocities) == len(self.motor_ids):
+                self.current_positions = positions[:]
+                self.current_velocities = velocities[:]
+                return True
+            else:
+                # Fallback a valores anteriores si hay problemas de comunicación
+                self.node.get_logger().debug("Datos incompletos - usando valores anteriores")
+                return True
+                
         except Exception as e:
-            self.node.get_logger().debug(f"Error obteniendo estados: {str(e)}")
-            return False
+            self.node.get_logger().debug(f"Error obteniendo estados motores: {e}")
+            # Mantener valores anteriores en caso de error
+            return True
 
     def send_positions(self):
-        """Envía posiciones actuales vía UDP"""
-        if self.send_socket is None:
+        """Envía posiciones vía UDP con formato flexible según número de motores"""
+        if not self.send_socket:
             return
         
         try:
-            # Ajustar el signo del motor 4 (índice 3) como en el código original
-            pos_to_send = self.current_positions.copy()
-            if len(pos_to_send) > 3:
-                pos_to_send[3] = -1.0 * pos_to_send[3]
+            # Preparar posiciones locales para enviar
+            # Crear array del tamaño máximo y llenar con posiciones de motores locales
+            positions_to_send = [0.0] * max(self.max_total_motors, self.num_total_motors)
             
-            # Empaquetar datos (8 floats)
-            if len(pos_to_send) < 8:
-                pos_to_send.extend([0.0] * (8 - len(pos_to_send)))
+            # Llenar con posiciones reales de motores locales usando sus IDs como índices
+            for i, motor_id in enumerate(self.motor_ids):
+                if i < len(self.current_positions) and motor_id <= len(positions_to_send):
+                    # Usar el ID del motor como índice en el array UDP (motor_id - 1 para base 0)
+                    motor_index = motor_id - 1
+                    if motor_index >= 0 and motor_index < len(positions_to_send):
+                        positions_to_send[motor_index] = self.current_positions[i]
             
-            struct_data = struct.pack('8f', *pos_to_send[:8])
-            # Enviar al puerto correcto de la máquina remota
-            self.send_socket.sendto(struct_data, (self.remote_ip, self.send_port))
+            # Crear formato dinámico basado en número de motores a enviar
+            format_str = f'{len(positions_to_send)}f'
             
-            # Debug cada 100 envíos
+            # Empaquetar y enviar
+            struct_ql = struct.pack(format_str, *positions_to_send)
+            self.send_socket.sendto(struct_ql, self.local_addr)
+            
+            # Log ocasional para debug
             if not hasattr(self, '_send_count'):
                 self._send_count = 0
             self._send_count += 1
+            if self._send_count % 100 == 0:
+                # Mostrar posiciones de todos los motores activos
+                active_positions = [(i+1, pos) for i, pos in enumerate(positions_to_send) if pos != 0.0]
+                machine = 'A' if self.is_machine_a else 'B'
+                if active_positions:
+                    pos_str = ', '.join(f'M{motor_id}:{pos:.3f}' for motor_id, pos in active_positions)
+                    self.node.get_logger().info(f"UDP TX [{machine}] -> {self.local_addr}: {pos_str}")
+                else:
+                    self.node.get_logger().info(f"UDP TX [{machine}] -> {self.local_addr}: todas posiciones en 0")
             
-            if self._send_count % 10 == 0:  # Más frecuente para debug
-                self.node.get_logger().info(f"📤 Enviando posición {pos_to_send[0]:.3f} a {self.remote_ip}:{self.send_port}")
+        except socket.timeout:
+            # Para máquina A con problemas de timeout, contar silenciosamente
+            if not hasattr(self, '_timeout_fallback_count'):
+                self._timeout_fallback_count = 0
+            self._timeout_fallback_count += 1
             
+            if self._timeout_fallback_count % 100 == 0:
+                self.node.get_logger().warning(f"UDP timeout count: {self._timeout_fallback_count}")
+                
         except Exception as e:
-            self.node.get_logger().warning(f"Error enviando posiciones: {str(e)}")
+            self.node.get_logger().warning(f"Error enviando posiciones: {e}")
 
     def receive_positions(self):
-        """Recibe posiciones remotas vía UDP"""
-        if self.receive_socket is None:
+        """Recibe posiciones con formato flexible según número de motores"""
+        if not self.receive_socket:
             return
         
         try:
             data, addr = self.receive_socket.recvfrom(1024)
-            struct_data = struct.unpack('<8f', data)
+
+            if self.debug_udp_latency:
+                current_time = time.time()
+                if self.last_packet_time is not None:
+                    time_diff_ms = (current_time - self.last_packet_time) * 1000
+                    self.latency_sum += time_diff_ms
+                    self.latency_packet_count += 1
+                
+                self.last_packet_time = current_time
+
+                # Loguear resumen de estadísticas cada segundo
+                if current_time - self.last_latency_log_time >= 1.0:
+                    if self.latency_packet_count > 0:
+                        avg_latency = self.latency_sum / self.latency_packet_count
+                        
+                        self.node.get_logger().info(
+                            f"UDP Stats (último seg): "
+                            f"Latencia avg={avg_latency:.2f}ms | "
+                            f"Paquetes={self.latency_packet_count}/s"
+                        )
+                        
+                        # Resetear estadísticas
+                        self.latency_sum = 0.0
+                        self.latency_packet_count = 0
+                    
+                    self.last_latency_log_time = current_time
+            
+            # Calcular número de floats recibidos basado en tamaño de datos
+            num_floats = len(data) // 4  # Cada float son 4 bytes
+            format_str = f'{num_floats}f'
+            
+            # Desempaquetar datos recibidos
+            struct_qr = struct.unpack(format_str, data)
             
             with self.data_lock:
-                self.received_data.append(struct_data)
-            
-            # Debug cada 100 recepciones
-            if not hasattr(self, '_receive_count'):
-                self._receive_count = 0
-            self._receive_count += 1
-            
-            if self._receive_count % 10 == 0:  # Más frecuente para debug
-                self.node.get_logger().info(f"📥 Recibido posición {struct_data[0]:.3f} de {addr}")
+                self.received_data.append(struct_qr)
+                
+            # Log ocasional para debug
+            if not hasattr(self, '_recv_count'):
+                self._recv_count = 0
+            self._recv_count += 1
+            if self._recv_count % 100 == 0:
+                machine = 'A' if self.is_machine_a else 'B'
+                # Mostrar posiciones de todos los motores con datos no cero
+                active_positions = [(i+1, pos) for i, pos in enumerate(struct_qr) if pos != 0.0]
+                if active_positions:
+                    pos_str = ', '.join(f'M{motor_id}:{pos:.3f}' for motor_id, pos in active_positions)
+                    self.node.get_logger().info(f"UDP RX [{machine}] <- {addr}: {pos_str}")
+                else:
+                    self.node.get_logger().info(f"UDP RX [{machine}] <- {addr}: todas posiciones en 0")
                 
         except socket.timeout:
-            pass  # Timeout normal
+            if self.debug_udp_latency:
+                self.last_packet_time = None # Reset timer on timeout
+
+            # Timeout normal - no hacer nada, pero contar para debug
+            if not hasattr(self, '_timeout_count'):
+                self._timeout_count = 0
+            self._timeout_count += 1
+            
+            # Log ocasional de timeouts para debug
+            if self._timeout_count % 1000 == 0:
+                self.node.get_logger().debug(f"UDP RX timeouts: {self._timeout_count}")
+                
         except Exception as e:
-            self.node.get_logger().warning(f"Error recibiendo posiciones: {str(e)}")
+            self.node.get_logger().warning(f"Error recibiendo posiciones: {e}")
 
     def update_target_positions(self):
-        """Actualiza posiciones objetivo desde datos recibidos con límites de seguridad"""
+        """Actualiza posiciones objetivo con validación flexible según número de motores"""
         with self.data_lock:
             if not self.received_data:
                 return False
             
-            # Procesar el último dato recibido
+            # Procesar datos recibidos
             for entry in self.received_data:
-                # Aplicar límites de seguridad como en el código original
-                limits = [
-                    (-1.58, 1.58),    # Motor 1
-                    (-0.79, 1.58),    # Motor 2
-                    (-3.1416, 1.58),  # Motor 3
-                    (-0.18, 1.16),    # Motor 4
-                    (-1.58, 1.58),    # Motor 5
-                    (-1.58, 0.79),    # Motor 6
-                    (-1.58, 3.1416),  # Motor 7
-                    (-1.16, 0.18)     # Motor 8
-                ]
+                # Actualizar posiciones objetivo con validación básica
+                # Expandir target_positions si es necesario
+                while len(self.target_positions) < len(entry):
+                    self.target_positions.append(0.0)
                 
-                for i, (min_val, max_val) in enumerate(limits[:len(self.motor_ids)]):
-                    if i < len(entry) and min_val <= entry[i] <= max_val:
-                        self.target_positions[i] = entry[i]
+                for i in range(len(entry)):
+                    received_position = entry[i]
+                    
+                    # Aplicar límites básicos de seguridad para cualquier motor
+                    if received_position > -3.15 and received_position < 3.15:  # Límites generales ±π
+                        if i < len(self.target_positions):
+                            self.target_positions[i] = received_position
             
             # Limpiar datos procesados
             self.received_data.clear()
             return True
 
     def calculate_control_currents(self):
-        """Calcula corrientes de control basado en error de posición y velocidad"""
-        currents = []
+        """Calcula corrientes de control usando algoritmo PD exacto del pd_control_node.py"""
+        try:
+            currents = []
+            
+            # Para cada motor local
+            for i, motor_id in enumerate(self.motor_ids):
+                if self.is_machine_a:
+                    # Máquina A: corriente cero para movimiento libre
+                    currents.append(0.0)
+                else:
+                    # Máquina B: usar PD control exacto del pd_control_node.py
+                    # Obtener target desde datos UDP usando el ID del motor como índice
+                    target_pos = 0.0  # Default
+                    motor_index = motor_id - 1  # Convertir a índice base 0
+                    if motor_index >= 0 and motor_index < len(self.target_positions):
+                        target_pos = self.target_positions[motor_index]
+                    
+                    current_pos = self.current_positions[i] if i < len(self.current_positions) else 0.0
+                    
+                    # Error de posición (pd_control_node.py líneas 132-133)
+                    error = current_pos - target_pos
+
+                    # Estimador de velocidad (pd_control_node.py líneas 135-140)
+                    if i < len(self.vel_estimators):
+                        self.vel_estimators[i] = self.Fc * (self.theta_estimators[i] + current_pos)
+                        self.theta_estimators[i] = self.theta_estimators[i] - self.Tl * self.vel_estimators[i]
+                        vel_estimate = self.vel_estimators[i]
+                    else:
+                        vel_estimate = 0.0
+
+                    # Usar kp específica para motor 7, kp normal para el resto
+                    kp_value = self.kp_motor7 if motor_id == 7 else self.kp
+
+                    # Control PD no lineal exacto (pd_control_node.py líneas 143-144)
+                    tau = -kp_value * ((abs(error)**self.p1) * np.sign(error)) - self.kd * vel_estimate
+                    
+                    # Convertir torque a corriente (pd_control_node.py líneas 147-148)
+                    current = tau / self.Kt
+                    
+                    # Límites de seguridad
+                    current = max(-self.max_current, min(self.max_current, current))
+                    
+                    currents.append(current)
+                    
+                    # Debug cada 100 iteraciones - mostrar info para cada motor
+                    if not hasattr(self, '_debug_counter'):
+                        self._debug_counter = {}
+                    if motor_id not in self._debug_counter:
+                        self._debug_counter[motor_id] = 0
+                    
+                    self._debug_counter[motor_id] += 1
+                    if self._debug_counter[motor_id] % 100 == 0:
+                        self.node.get_logger().info(f"🎯 PD Control M{motor_id}: pos={current_pos:.3f}, target={target_pos:.3f}, error={error:.3f}, current={current:.3f}A")
+            
+            return currents
+            
+        except Exception as e:
+            self.node.get_logger().error(f"Error calculando corrientes PD: {e}")
+            return [0.0] * len(self.motor_ids)
+
+    def right_gravity_vector(self, q):
+        """Calcula compensación de gravedad para brazo derecho (basado en código original)"""
+        # Implementación simplificada usando parámetros del robot real
+        # Solo las primeras dos articulaciones necesitan compensación de gravedad
         
-        for i in range(len(self.motor_ids)):
-            if i < len(self.current_positions) and i < len(self.target_positions):
-                # Error de posición
-                pos_error = self.current_positions[i] - self.target_positions[i]
-                
-                # Error de velocidad (si está disponible)
-                vel_error = 0.0
-                if i < len(self.current_velocities):
-                    vel_error = self.current_velocities[i]
-                
-                # Calcular corriente objetivo usando parámetros
-                iq = (-self.kp * pos_error - self.kd * vel_error) / self.kt
-                currents.append(iq)
-            else:
-                currents.append(0.0)
+        if len(q) < 4:
+            return [0.0, 0.0, 0.0, 0.0]
         
-        return currents
+        q1, q2, q3, q4 = q[:4]
+        
+        # Parámetros del robot SMILEi (estimados)
+        m1, m2 = 1.5, 1.0  # masas aproximadas (kg)
+        l1, l2 = 0.25, 0.20  # longitudes de eslabones (m)
+        lc1, lc2 = l1/2, l2/2  # centros de masa en medio de eslabones
+        g = 9.81  # gravedad
+        
+        # Compensación de gravedad para primeras dos articulaciones
+        tau1 = (m1 * lc1 + m2 * l1) * g * math.cos(q1) + m2 * lc2 * g * math.cos(q1 + q2)
+        tau2 = m2 * lc2 * g * math.cos(q1 + q2)
+        
+        # Articulaciones 3 y 4 sin compensación (como en código original)
+        tau3 = 0.0
+        tau4 = 0.0
+        
+        return [tau1, tau2, tau3, tau4]
+    
+    def left_gravity_vector(self, q):
+        """Calcula compensación de gravedad para brazo izquierdo (basado en código original)"""
+        # Implementación similar al brazo derecho
+        
+        if len(q) < 4:
+            return [0.0, 0.0, 0.0, 0.0]
+        
+        q1, q2, q3, q4 = q[:4]
+        
+        # Parámetros iguales al brazo derecho
+        m1, m2 = 1.5, 1.0  # masas aproximadas (kg)
+        l1, l2 = 0.25, 0.20  # longitudes de eslabones (m)
+        lc1, lc2 = l1/2, l2/2  # centros de masa
+        g = 9.81  # gravedad
+        
+        # Compensación de gravedad (orientación puede ser espejada)
+        tau1 = (m1 * lc1 + m2 * l1) * g * math.cos(q1) + m2 * lc2 * g * math.cos(q1 + q2)
+        tau2 = m2 * lc2 * g * math.cos(q1 + q2)
+        
+        # Articulaciones 3 y 4 sin compensación
+        tau3 = 0.0
+        tau4 = 0.0
+        
+        return [tau1, tau2, tau3, tau4]
 
     def send_current_commands(self, currents):
-        """Envía comandos de corriente a los motores"""
+        """Envía comandos de corriente como bear_r.set_goal_iq en código de referencia"""
         try:
-            req = SetGoalIq.Request()
-            req.motor_ids = self.motor_ids
-            req.goal_iq = currents
+            if not self.hardware_manager:
+                # Modo simulación
+                return True
             
-            # Debug de corrientes cada 100 comandos
-            if not hasattr(self, '_current_send_count'):
-                self._current_send_count = 0
-            self._current_send_count += 1
+            # Usar set_goal_iq del hardware_manager como en el código de referencia
+            # bear_r.set_goal_iq((m_id_1,i_g_1),(m_id_2,i_g_2),(m_id_3,i_g_3),(m_id_4,i_g_4))
+            # bear_l.set_goal_iq((m_id_5,i_g_5),(m_id_6,i_g_6),(m_id_7,i_g_7),(m_id_8,i_g_8))
             
-            if self._current_send_count % 10 == 0:  # Más frecuente para debug
-                curr_str = ", ".join([f"I{i}={c:.3f}" for i, c in enumerate(currents)])
-                self.node.get_logger().info(f"⚡ Enviando corrientes: [{curr_str}]")
+            # Crear pares de (motor_id, current) para motores locales disponibles
+            current_pairs = []
+            for i, motor_id in enumerate(self.motor_ids):
+                current = currents[i] if i < len(currents) else 0.0
+                current_pairs.append((motor_id, current))
             
-            future = self.set_iq_client.call_async(req)
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=0.05)
+            # Enviar corrientes usando hardware_manager
+            success = self.hardware_manager.set_goal_iq(*current_pairs)
             
-            if future.done():
-                result = future.result()
-                if not result.success and self._current_send_count % 50 == 0:
-                    self.node.get_logger().warning(f"Error en set_goal_iq: {result.message}")
-                return result.success
+            # Log de las corrientes calculadas para debugging
+            if not hasattr(self, '_current_log_count'):
+                self._current_log_count = 0
+            self._current_log_count += 1
             
-            return False
+            if self.debug_pd_control and self._current_log_count % 50 == 0:
+                machine = 'A' if self.is_machine_a else 'B'
+                # Mostrar información de cada motor por separado
+                for i, motor_id in enumerate(self.motor_ids):
+                    if i < len(currents) and i < len(self.current_positions):
+                        current = currents[i]
+                        local_pos = self.current_positions[i]
+                        motor_index = motor_id - 1
+                        remote_pos = self.target_positions[motor_index] if motor_index < len(self.target_positions) else 0.0
+                        error = local_pos - remote_pos
+                        # Normalizar error para mostrar
+                        while error > 3.14159:
+                            error -= 2 * 3.14159
+                        while error < -3.14159:
+                            error += 2 * 3.14159
+                        self.node.get_logger().info(f"Debug [{machine}] M{motor_id}: Local={local_pos:.3f}, Remote={remote_pos:.3f}, Error={error:.3f}, I={current:.3f}A")
+            
+            return success
+            
         except Exception as e:
-            self.node.get_logger().warning(f"Error enviando corrientes: {str(e)}")
+            self.node.get_logger().error(f"Error enviando corrientes: {e}")
+            return False
+    
+    def send_position_commands(self, positions):
+        """Envía comandos de POSICIÓN (mucho más estable que corriente)"""
+        try:
+            if not self.hardware_manager:
+                # Modo simulación
+                return True
+            
+            # Crear pares de (motor_id, position) para motores locales disponibles
+            position_pairs = []
+            for i, motor_id in enumerate(self.motor_ids):
+                position = positions[i] if i < len(positions) else 0.0
+                position_pairs.append((motor_id, position))
+            
+            # Enviar posiciones usando hardware_manager (modo posición)
+            success = self.hardware_manager.set_goal_position(*position_pairs)
+            
+            # Log cada cierto tiempo para debugging
+            if not hasattr(self, '_position_log_count'):
+                self._position_log_count = 0
+            self._position_log_count += 1
+            
+            if self._position_log_count % 200 == 0:  # Menos frecuente que corrientes
+                position_str = ', '.join(f'{p:.3f}' for p in positions)
+                motor_str = ', '.join(f'M{mid}' for mid in self.motor_ids)
+                machine = 'A' if self.is_machine_a else 'B'
+                self.node.get_logger().info(f"🎯 Posición [{machine}]: {motor_str}={position_str}")
+            
+            return success
+            
+        except Exception as e:
+            self.node.get_logger().error(f"Error enviando posiciones: {e}")
             return False
 
     def initialise(self) -> None:
-        """Inicializar teleoperación remota"""
-        self.node.get_logger().info(f"🚀 INICIO: Iniciando teleoperación remota para motores {self.motor_ids}")
-        self.node.get_logger().info(f"🌐 Red: {self.remote_ip}:{self.send_port} → {self.local_ip}:{self.receive_port}")
-        self.node.get_logger().info("🎮 Control: [ENTER] para terminar")
-        
+        """Inicializar teleoperación remota según secuencia del código de referencia"""
+        self.node.get_logger().info("Iniciando teleoperación remota...")
         self.running = True
+        self.communication_error_count = 0
         
-        # Configuración inicial
-        self.node.get_logger().info("📍 Paso 1: Enviando a posición cero...")
+        # Usar hardware_manager mejorado en lugar de conexión directa Pybear
+        if self.hardware_manager:
+            self.node.get_logger().info("✅ Usando hardware_manager mejorado con patrones pd_control_node.py")
+        else:
+            self.node.get_logger().warning("⚠️ Hardware manager no disponible - modo simulación")
+        
+        # Paso 1: Zero position como en código de referencia
         if not self.zero_position():
-            self.node.get_logger().warning("⚠️ Error en posición cero, continuando...")
-        else:
-            self.node.get_logger().info("✅ Posición cero OK")
+            self.node.get_logger().error("Error en zero_position")
+            self.running = False
+            return
         
-        self.node.get_logger().info("⏳ Esperando 2 segundos...")
-        time.sleep(2)
-        
-        self.node.get_logger().info("🔧 Paso 2: Configurando control de corriente...")
+        # Paso 2: Configurar control de corriente
         if not self.setup_current_control():
-            self.node.get_logger().error("❌ Error configurando control de corriente")
+            self.node.get_logger().error("Error configurando control de corriente")
             self.running = False
             return
-        else:
-            self.node.get_logger().info("✅ Control de corriente OK")
         
-        self.node.get_logger().info("🌐 Paso 3: Configurando comunicación UDP...")
+        # Paso 3: Configurar comunicación UDP
         if not self.setup_udp_communication():
-            self.node.get_logger().error("❌ Error configurando comunicación UDP")
+            self.node.get_logger().error("Error configurando UDP")
             self.running = False
             return
-        else:
-            self.node.get_logger().info("✅ UDP configurado correctamente")
-            
-        self.node.get_logger().info("🎯 Inicialización completa, entrando al bucle principal...")
+        
+        # Paso 4: Obtener posiciones iniciales
+        if not self.get_motor_states():
+            self.node.get_logger().warning("Error obteniendo estados iniciales - continuando")
+            # Inicializar con ceros solo para motores locales
+            self.current_positions = [0.0] * len(self.motor_ids)
+            self.current_velocities = [0.0] * len(self.motor_ids)
+        
+        # Inicializar posiciones objetivo con tamaño del sistema total
+        self.target_positions = [0.0] * self.num_total_motors
+        
+        # Inicializar estimadores de velocidad (del pd_control_node.py)
+        self.theta_estimators = [0.0] * len(self.motor_ids)
+        self.vel_estimators = [0.0] * len(self.motor_ids)
+
+        # Resetear estadísticas de latencia
+        if self.debug_udp_latency:
+            self.latency_sum = 0.0
+            self.latency_packet_count = 0
+            self.last_latency_log_time = time.time()
+        
+        self.node.get_logger().info(f"Teleoperación iniciada - Máquina {'A' if self.is_machine_a else 'B'}")
+        self.node.get_logger().info(f"Local: {self.local_ip}:{self.receive_port} -> Remoto: {self.local_addr}")
 
     def update(self) -> py_trees.common.Status:
-        """Bucle principal de teleoperación remota"""
+        """Bucle principal siguiendo exactamente la estructura del código de referencia"""
         if not self.running:
             return py_trees.common.Status.SUCCESS
         
-        # Verificar errores de comunicación
-        if self.communication_error_count >= self.max_communication_errors:
-            self.node.get_logger().error(f"Demasiados errores de comunicación. Terminando.")
-            self.running = False
-            return py_trees.common.Status.FAILURE
-        
-        # Verificar entrada del usuario
-        if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
-            line = sys.stdin.readline().strip()
-            self.node.get_logger().info("🔄 Terminando teleoperación remota")
-            self.running = False
-            return py_trees.common.Status.SUCCESS
+        # Verificar entrada del usuario para terminar - COMENTADO para ROS
+        # En ROS no necesitamos esta verificación de stdin ya que el comportamiento
+        # se maneja a través de la state machine
+        # if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
+        #     line = sys.stdin.readline().strip()
+        #     self.node.get_logger().info("Terminado por usuario")
+        #     self.running = False
+        #     return py_trees.common.Status.SUCCESS
         
         try:
-            # Obtener estados actuales
+            # Paso 1: Obtener estados actuales de motores (como en while True del código original)
             if not self.get_motor_states():
                 self.communication_error_count += 1
-                if hasattr(self, '_error_counter'):
-                    self._error_counter += 1
-                else:
-                    self._error_counter = 1
-                    
-                if self._error_counter % 100 == 0:
-                    self.node.get_logger().warning(f"❌ Error obteniendo estados del motor {self._error_counter} veces")
                 return py_trees.common.Status.RUNNING
             
-            # Comunicación UDP en hilos separados
+            # Paso 2: Comunicación UDP en hilos separados (como en código de referencia)
             send_thread = threading.Thread(target=self.send_positions, daemon=True)
             receive_thread = threading.Thread(target=self.receive_positions, daemon=True)
             
-            send_thread.start()
             receive_thread.start()
+            send_thread.start()
             
+            # Paso 3: Procesar datos recibidos y aplicar límites
+            self.update_target_positions()
+            
+            # Esperar a que terminen los hilos
             send_thread.join()
             receive_thread.join()
             
-            # Actualizar objetivos desde datos recibidos
-            if self.update_target_positions():
-                # Calcular corrientes de control
-                currents = self.calculate_control_currents()
-                
-                # Enviar comandos
-                if self.send_current_commands(currents):
-                    self.communication_error_count = max(0, self.communication_error_count - 1)
-                else:
-                    self.communication_error_count += 1
+            # Paso 4: Calcular y enviar corrientes PD (como pd_control_node.py)
+            control_currents = self.calculate_control_currents()
+            self.send_current_commands(control_currents)
             
-            # Debug cada 50 iteraciones
-            if hasattr(self, '_debug_counter'):
-                self._debug_counter += 1
-            else:
-                self._debug_counter = 0
+            # Reset contador de errores gradualmente si llegamos aquí sin problemas
+            if self.communication_error_count > 0:
+                self.communication_error_count = max(0, self.communication_error_count - 2)  # Reducir más rápido
             
-            if self._debug_counter % 50 == 0:
-                pos_str = ", ".join([f"M{mid}={pos:.3f}" for mid, pos in 
-                                   zip(self.motor_ids, self.current_positions)])
-                target_str = ", ".join([f"T{i}={t:.3f}" for i, t in 
-                                      enumerate(self.target_positions)])
-                error = self.current_positions[0] - self.target_positions[0] if len(self.current_positions) > 0 and len(self.target_positions) > 0 else 0.0
-                self.node.get_logger().info(f"Pos: [{pos_str}] Target: [{target_str}] Error: {error:.3f}")
+        except KeyboardInterrupt:
+            self.node.get_logger().info("Terminando comunicación...")
+            self.running = False
+            return py_trees.common.Status.SUCCESS
             
         except Exception as e:
-            self.node.get_logger().error(f"Error en teleoperación remota: {str(e)}")
+            self.node.get_logger().error(f"Error en bucle principal: {e}")
             self.communication_error_count += 1
+            
+            if self.communication_error_count >= self.max_communication_errors:
+                self.node.get_logger().error("Demasiados errores de comunicación")
+                self.running = False
+                return py_trees.common.Status.FAILURE
         
-        time.sleep(1.0 / self.control_frequency)  # Control de alta frecuencia configurable
+        # SIN THROTTLE: Permitir que py_trees maneje la frecuencia naturalmente
+        # Igual que pd_control_node.py que funciona perfecto
         return py_trees.common.Status.RUNNING
 
     def restore_position_control(self):
-        """Restaura control de posición antes de terminar"""
-        self.node.get_logger().info("Restaurando control de posición")
-        
+        """Restaura control de posición y va a home como en código de referencia"""
         try:
+            if not self.hardware_manager:
+                self.node.get_logger().info("[SIM] Restaurando control de posición")
+                return
+            
+            self.node.get_logger().info("Restaurando control de posición...")
+            
+            # Restaurar PID gains para posición como en código de referencia
+            if hasattr(self.hardware_manager, 'configure_pid_gains'):
+                self.hardware_manager.configure_pid_gains(self.motor_ids, p_gain=5.0, i_gain=0.0, d_gain=0.2)
+            
             # Cambiar a modo posición
-            req_mode = SetMode.Request()
-            req_mode.motor_ids = self.motor_ids
-            req_mode.modes = [2] * len(self.motor_ids)
+            self.hardware_manager.set_mode(*[(motor_id, 2) for motor_id in self.motor_ids])
             
-            future = self.set_mode_client.call_async(req_mode)
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
+            # Esperar un poco antes de ir a home
+            time.sleep(2)
             
-            time.sleep(1.0)
+            # Ir a posición home (como en código de referencia)
+            # home_position() en el código original - posiciones seguras para cada motor
+            default_home_positions = [0.0, 1.5707, -1.5707, -0.785, 0.0, -1.5707, 1.5707, -0.785]
             
-            # Ir a posición home
-            req_home = SetMotorIdAndTarget.Request()
-            req_home.motor_ids = self.motor_ids
-            req_home.target_positions = [1.5707] * len(self.motor_ids)  # 90 grados
+            position_pairs = []
+            for i, motor_id in enumerate(self.motor_ids):
+                # Usar posición home por defecto si está en la lista, sino usar 0.0
+                if i < len(default_home_positions):
+                    home_pos = default_home_positions[i]
+                else:
+                    home_pos = 0.0  # Posición segura por defecto
+                position_pairs.append((motor_id, home_pos))
             
-            future = self.set_position_client.call_async(req_home)
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
+            if position_pairs:
+                self.hardware_manager.set_goal_position(*position_pairs)
+                self.node.get_logger().info(f"Enviando a home {len(position_pairs)} motores: {[f'M{mid}:{pos:.3f}' for mid, pos in position_pairs]}")
             
         except Exception as e:
-            self.node.get_logger().error(f"Error restaurando control: {str(e)}")
+            self.node.get_logger().error(f"Error restaurando control: {e}")
 
     def terminate(self, new_status: py_trees.common.Status) -> None:
-        """Terminar teleoperación remota"""
+        """Terminar teleoperación como secuencia del código de referencia"""
         self.node.get_logger().info(f"Terminando teleoperación remota con estado {new_status}")
         self.running = False
         
@@ -537,14 +827,20 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         try:
             if self.send_socket:
                 self.send_socket.close()
+                self.send_socket = None
             if self.receive_socket:
                 self.receive_socket.close()
-        except:
-            pass
+                self.receive_socket = None
+            self.node.get_logger().info("Sockets UDP cerrados correctamente")
+        except Exception as e:
+            self.node.get_logger().warning(f"Error cerrando sockets: {e}")
         
-        # Restaurar control de posición
-        self.restore_position_control()
+        # Restaurar control de posición y ir a home
+        try:
+            self.restore_position_control()
+        except Exception as e:
+            self.node.get_logger().error(f"Error en restauración: {e}")
         
-        # Solo destruir nodo si lo creamos nosotros
+        # Destruir nodo solo si lo creamos
         if self.own_node and self.node:
             self.node.destroy_node()

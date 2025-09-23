@@ -13,17 +13,19 @@ class MotorDataPublisher(Node):
         # Parámetros
         self.declare_parameter('publish_rate', 5.0)  # Hz
         self.publish_rate = self.get_parameter('publish_rate').value
+        self.declare_parameter('robot_name', '')
+        self.robot_name = self.get_parameter('robot_name').value
 
         # Publishers
-        self.position_publisher = self.create_publisher(Float64MultiArray, 'motor_data/positions', 10)
-        self.velocity_publisher = self.create_publisher(Float64MultiArray, 'motor_data/velocities', 10)
-        self.current_publisher = self.create_publisher(Float64MultiArray, 'motor_data/currents', 10)
+        self.position_publisher = self.create_publisher(Float64MultiArray, self._get_topic_name('motor_data/positions'), 10)
+        self.velocity_publisher = self.create_publisher(Float64MultiArray, self._get_topic_name('motor_data/velocities'), 10)
+        self.current_publisher = self.create_publisher(Float64MultiArray, self._get_topic_name('motor_data/currents'), 10)
 
         # Service Clients
-        self.get_positions_client = self.create_client(GetMotorPositions, 'westwood_motor/get_motor_positions')
-        self.get_velocities_client = self.create_client(GetMotorVelocities, 'westwood_motor/get_motor_velocities')
-        self.get_currents_client = self.create_client(GetMotorCurrents, 'westwood_motor/get_motor_currents')
-        self.get_available_motors_client = self.create_client(GetAvailableMotors, 'westwood_motor/get_available_motors')
+        self.get_positions_client = self.create_client(GetMotorPositions, self._get_topic_name('westwood_motor/get_motor_positions'))
+        self.get_velocities_client = self.create_client(GetMotorVelocities, self._get_topic_name('westwood_motor/get_motor_velocities'))
+        self.get_currents_client = self.create_client(GetMotorCurrents, self._get_topic_name('westwood_motor/get_motor_currents'))
+        self.get_available_motors_client = self.create_client(GetAvailableMotors, self._get_topic_name('westwood_motor/get_available_motors'))
 
         # Esperar a que los servicios estén disponibles
         self.wait_for_services()
@@ -38,6 +40,11 @@ class MotorDataPublisher(Node):
 
         # Timer para publicar datos
         self.timer = self.create_timer(1.0 / self.publish_rate, self.publish_data)
+
+    def _get_topic_name(self, topic_name):
+        if self.robot_name:
+            return f'/{self.robot_name}/{topic_name}'
+        return topic_name
 
     def wait_for_services(self):
         self.get_logger().info('Waiting for motor services...')
