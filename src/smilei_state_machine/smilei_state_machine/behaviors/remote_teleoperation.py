@@ -344,15 +344,15 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             if self.is_machine_a:
                 # Máquina A (master) envía su propio timestamp actual
                 timestamp = self.node.get_clock().now().nanoseconds / 1e9
-                data_to_send = positions_to_send + [timestamp]
             else:
                 # Máquina B (esclavo) devuelve el timestamp que recibió
-                data_to_send = positions_to_send + [self.timestamp_to_echo]
+                timestamp = self.timestamp_to_echo
             
-            # Crear formato dinámico y empaquetar
-            format_str = f'{len(data_to_send)}f'
-            struct_ql = struct.pack(format_str, *data_to_send)
-            self.send_socket.sendto(struct_ql, self.local_addr)
+            # Crear formato dinámico: N floats para posiciones, 1 double para timestamp
+            num_positions = len(positions_to_send)
+            format_str = f'{num_positions}fd'
+            packed_data = struct.pack(format_str, *positions_to_send, timestamp)
+            self.send_socket.sendto(packed_data, self.local_addr)
             
             # Log ocasional para debug (sin mostrar el timestamp)
             if not hasattr(self, '_send_count'):
