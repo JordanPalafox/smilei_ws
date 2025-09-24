@@ -379,7 +379,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.node.get_logger().warning(f"Error enviando posiciones: {e}")
 
     def receive_positions(self):
-        """Recibe datos, calcula latencia RTT/2 si es master, o guarda timestamp si es esclavo."""
+        """Recibe datos, decodifica (double) y calcula latencia RTT/2 o guarda timestamp."""
         if not self.receive_socket:
             return
         
@@ -387,15 +387,23 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             data, addr = self.receive_socket.recvfrom(1024)
             reception_time = self.node.get_clock().now()
 
-            num_floats = len(data) // 4
-            if num_floats < 2:
-                return
+            # --- Lógica de Unpacking Correcta (N floats + 1 double) ---
+            # El timestamp es un double (8 bytes), las posiciones son floats (4 bytes).
+            if len(data) < 8:
+                return  # Paquete demasiado corto para contener un timestamp.
 
-            format_str = f'{num_floats}f'
-            unpacked_data = struct.unpack(format_str, data)
+            num_positions = (len(data) - 8) // 4
+            format_str = f'{num_positions}fd'
+
+            # Verificar que el tamaño del paquete coincide con el formato esperado.
+            if struct.calcsize(format_str) != len(data):
+                self.node.get_logger().warning(f"Paquete UDP corrupto recibido. Tamaño: {len(data)}, Formato: {format_str}")
+                return
             
+            unpacked_data = struct.unpack(format_str, data)
             positions = unpacked_data[:-1]
             received_timestamp = unpacked_data[-1]
+            # --- Fin de la corrección ---
 
             if self.debug_udp_latency:
                 if self.is_machine_a:
@@ -418,8 +426,9 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                     # Máquina B (esclavo) guarda el timestamp para devolverlo
                     self.timestamp_to_echo = received_timestamp
 
-                # Logueo de estadísticas (solo se actualiza en la máquina A)
-                if self.is_machine_a and (reception_time.nanoseconds / 1e9) - self.last_latency_log_time >= 1.0:
+                # Logueo de estadísticas (solo en máquina A)
+                current_time_s = reception_time.nanoseconds / 1e9
+                if self.is_machine_a and (current_time_s - self.last_latency_log_time) >= 1.0:
                     if self.latency_packet_count > 0:
                         avg_latency = self.latency_sum / self.latency_packet_count
                         self.node.get_logger().info(
@@ -429,7 +438,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                         )
                     self.latency_sum = 0.0
                     self.latency_packet_count = 0
-                    self.last_latency_log_time = reception_time.nanoseconds / 1e9
+                    self.last_latency_log_time = current_time_s
             
             with self.data_lock:
                 self.received_data.append(positions)
