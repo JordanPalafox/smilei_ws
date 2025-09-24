@@ -325,7 +325,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             return True
 
     def send_positions(self):
-        """Envía posiciones y timestamp vía UDP con formato flexible."""
+        """Envía posiciones y el timestamp apropiado para el cálculo RTT."""
         if not self.send_socket:
             return
         
@@ -340,13 +340,17 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                     if motor_index >= 0 and motor_index < len(positions_to_send):
                         positions_to_send[motor_index] = self.current_positions[i]
 
-            # Añadir timestamp al final del payload. time.time() es un float.
-            data_to_send = positions_to_send + [time.time()]
+            # Lógica de timestamp para RTT
+            if self.is_machine_a:
+                # Máquina A (master) envía su propio timestamp actual
+                timestamp = self.node.get_clock().now().nanoseconds / 1e9
+                data_to_send = positions_to_send + [timestamp]
+            else:
+                # Máquina B (esclavo) devuelve el timestamp que recibió
+                data_to_send = positions_to_send + [self.timestamp_to_echo]
             
-            # Crear formato dinámico
+            # Crear formato dinámico y empaquetar
             format_str = f'{len(data_to_send)}f'
-            
-            # Empaquetar y enviar
             struct_ql = struct.pack(format_str, *data_to_send)
             self.send_socket.sendto(struct_ql, self.local_addr)
             
@@ -364,7 +368,6 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                     self.node.get_logger().info(f"UDP TX [{machine}] -> {self.local_addr}: todas posiciones en 0")
             
         except socket.timeout:
-            # Para máquina A con problemas de timeout, contar silenciosamente
             if not hasattr(self, '_timeout_fallback_count'):
                 self._timeout_fallback_count = 0
             self._timeout_fallback_count += 1
@@ -376,48 +379,57 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.node.get_logger().warning(f"Error enviando posiciones: {e}")
 
     def receive_positions(self):
-        """Recibe posiciones, extrae timestamp y calcula latencia one-way."""
+        """Recibe datos, calcula latencia RTT/2 si es master, o guarda timestamp si es esclavo."""
         if not self.receive_socket:
             return
         
         try:
             data, addr = self.receive_socket.recvfrom(1024)
-            reception_time = time.time()
+            reception_time = self.node.get_clock().now()
 
-            # Calcular número de floats recibidos
             num_floats = len(data) // 4
-            if num_floats == 0:
-                return  # Paquete vacío, ignorar
+            if num_floats < 2:
+                return
 
             format_str = f'{num_floats}f'
             unpacked_data = struct.unpack(format_str, data)
             
-            # El último float es el timestamp, el resto son posiciones
             positions = unpacked_data[:-1]
-            send_time = unpacked_data[-1]
+            received_timestamp = unpacked_data[-1]
 
             if self.debug_udp_latency:
-                # Calcular latencia one-way en milisegundos
-                latency_ms = (reception_time - send_time) * 1000
-                self.latency_sum += latency_ms
-                self.latency_packet_count += 1
+                if self.is_machine_a:
+                    # Máquina A (master) calcula la latencia RTT
+                    if received_timestamp > 0:  # Ignorar ecos iniciales con timestamp 0
+                        rtt_s = (reception_time.nanoseconds / 1e9) - received_timestamp
+                        latency_ms = (rtt_s / 2.0) * 1000.0
 
-                # Loguear resumen de estadísticas cada segundo
-                if reception_time - self.last_latency_log_time >= 1.0:
+                        # Filtro de robustez para la latencia calculada
+                        if 0 < latency_ms < 1000:
+                            self.latency_sum += latency_ms
+                            self.latency_packet_count += 1
+                        else:
+                            # Log de latencia anómala (podría ser el primer paquete)
+                            if not hasattr(self, '_rtt_warn_count'): self._rtt_warn_count = 0
+                            if self._rtt_warn_count % 100 == 0:
+                                self.node.get_logger().warning(f"Latencia RTT/2 anómala o inicial: {latency_ms:.2f}ms")
+                            self._rtt_warn_count += 1
+                else:
+                    # Máquina B (esclavo) guarda el timestamp para devolverlo
+                    self.timestamp_to_echo = received_timestamp
+
+                # Logueo de estadísticas (solo se actualiza en la máquina A)
+                if self.is_machine_a and (reception_time.nanoseconds / 1e9) - self.last_latency_log_time >= 1.0:
                     if self.latency_packet_count > 0:
                         avg_latency = self.latency_sum / self.latency_packet_count
-                        
                         self.node.get_logger().info(
                             f"UDP Stats (último seg): "
-                            f"Latencia one-way avg={avg_latency:.2f}ms | "
+                            f"Latencia RTT/2 avg={avg_latency:.2f}ms | "
                             f"Paquetes={self.latency_packet_count}/s"
                         )
-                        
-                        # Resetear estadísticas
-                        self.latency_sum = 0.0
-                        self.latency_packet_count = 0
-                    
-                    self.last_latency_log_time = reception_time
+                    self.latency_sum = 0.0
+                    self.latency_packet_count = 0
+                    self.last_latency_log_time = reception_time.nanoseconds / 1e9
             
             with self.data_lock:
                 self.received_data.append(positions)
@@ -428,7 +440,6 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self._recv_count += 1
             if self._recv_count % 100 == 0:
                 machine = 'A' if self.is_machine_a else 'B'
-                # Mostrar posiciones de todos los motores con datos no cero
                 active_positions = [(i+1, pos) for i, pos in enumerate(positions) if pos != 0.0]
                 if active_positions:
                     pos_str = ', '.join(f'M{motor_id}:{pos:.3f}' for motor_id, pos in active_positions)
@@ -437,12 +448,10 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                     self.node.get_logger().info(f"UDP RX [{machine}] <- {addr}: todas posiciones en 0")
                 
         except socket.timeout:
-            # Ya no se necesita resetear last_packet_time
             if not hasattr(self, '_timeout_count'):
                 self._timeout_count = 0
             self._timeout_count += 1
             
-            # Log ocasional de timeouts para debug
             if self._timeout_count % 1000 == 0:
                 self.node.get_logger().debug(f"UDP RX timeouts: {self._timeout_count}")
                 
@@ -715,7 +724,9 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         if self.debug_udp_latency:
             self.latency_sum = 0.0
             self.latency_packet_count = 0
-            self.last_latency_log_time = time.time()
+            self.last_latency_log_time = self.node.get_clock().now().nanoseconds / 1e9
+        
+        self.timestamp_to_echo = 0.0
         
         self.node.get_logger().info(f"Teleoperación iniciada - Máquina {'A' if self.is_machine_a else 'B'}")
         self.node.get_logger().info(f"Local: {self.local_ip}:{self.receive_port} -> Remoto: {self.local_addr}")
