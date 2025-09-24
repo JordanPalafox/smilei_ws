@@ -4,6 +4,7 @@ import time
 import sys
 import socket
 import struct
+import queue
 import threading
 import numpy as np
 import math
@@ -42,8 +43,9 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         self.receive_socket = None
         
         # Control bilateral
-        self.received_data = []
-        self.data_lock = threading.Lock()
+        self.udp_receive_queue = queue.Queue()
+        self.receive_thread = None
+        self.stop_thread = threading.Event()
         
         # Ganancias de control PD - usando los valores del nodo PD que funciona
         self.kp = 1.0        # Proportional gain (del pd_control_node.py) - default para todos excepto motor 7
@@ -378,119 +380,94 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         except Exception as e:
             self.node.get_logger().warning(f"Error enviando posiciones: {e}")
 
-    def receive_positions(self):
-        """Recibe datos, decodifica (double) y calcula latencia RTT/2 o guarda timestamp."""
-        if not self.receive_socket:
-            return
-        
-        try:
-            data, addr = self.receive_socket.recvfrom(1024)
-            reception_time = self.node.get_clock().now()
+    def _udp_receiver_loop(self):
+        """Bucle para recibir datos UDP en un hilo de fondo."""
+        self.node.get_logger().info("Hilo receptor de UDP iniciado.")
+        while not self.stop_thread.is_set() and rclpy.ok():
+            try:
+                data, addr = self.receive_socket.recvfrom(1024)
+                reception_time = self.node.get_clock().now()
 
-            # --- Lógica de Unpacking Correcta (N floats + 1 double) ---
-            # El timestamp es un double (8 bytes), las posiciones son floats (4 bytes).
-            if len(data) < 8:
-                return  # Paquete demasiado corto para contener un timestamp.
+                if len(data) < 8:
+                    continue
 
-            num_positions = (len(data) - 8) // 4
-            format_str = f'{num_positions}fd'
+                num_positions = (len(data) - 8) // 4
+                format_str = f'{num_positions}fd'
 
-            # Verificar que el tamaño del paquete coincide con el formato esperado.
-            if struct.calcsize(format_str) != len(data):
-                self.node.get_logger().warning(f"Paquete UDP corrupto recibido. Tamaño: {len(data)}, Formato: {format_str}")
-                return
-            
-            unpacked_data = struct.unpack(format_str, data)
-            positions = unpacked_data[:-1]
-            received_timestamp = unpacked_data[-1]
-            # --- Fin de la corrección ---
-
-            if self.debug_udp_latency:
-                if self.is_machine_a:
-                    # Máquina A (master) calcula la latencia RTT
-                    if received_timestamp > 0:  # Ignorar ecos iniciales con timestamp 0
-                        rtt_s = (reception_time.nanoseconds / 1e9) - received_timestamp
-                        latency_ms = (rtt_s / 2.0) * 1000.0
-
-                        # Filtro de robustez para la latencia calculada
-                        if 0 < latency_ms < 1000:
-                            self.latency_sum += latency_ms
-                            self.latency_packet_count += 1
-                        else:
-                            # Log de latencia anómala (podría ser el primer paquete)
-                            if not hasattr(self, '_rtt_warn_count'): self._rtt_warn_count = 0
-                            if self._rtt_warn_count % 100 == 0:
-                                self.node.get_logger().warning(f"Latencia RTT/2 anómala o inicial: {latency_ms:.2f}ms")
-                            self._rtt_warn_count += 1
-                else:
-                    # Máquina B (esclavo) guarda el timestamp para devolverlo
-                    self.timestamp_to_echo = received_timestamp
-
-                # Logueo de estadísticas (solo en máquina A)
-                current_time_s = reception_time.nanoseconds / 1e9
-                if self.is_machine_a and (current_time_s - self.last_latency_log_time) >= 1.0:
-                    if self.latency_packet_count > 0:
-                        avg_latency = self.latency_sum / self.latency_packet_count
-                        self.node.get_logger().info(
-                            f"UDP Stats (último seg): "
-                            f"Latencia RTT/2 avg={avg_latency:.2f}ms | "
-                            f"Paquetes={self.latency_packet_count}/s"
-                        )
-                    self.latency_sum = 0.0
-                    self.latency_packet_count = 0
-                    self.last_latency_log_time = current_time_s
-            
-            with self.data_lock:
-                self.received_data.append(positions)
+                if struct.calcsize(format_str) != len(data):
+                    self.node.get_logger().warning(f"Paquete UDP corrupto recibido. Tamaño: {len(data)}, Formato: {format_str}")
+                    continue
                 
-            # Log ocasional para debug (usando `positions`)
-            if not hasattr(self, '_recv_count'):
-                self._recv_count = 0
-            self._recv_count += 1
-            if self._recv_count % 100 == 0:
-                machine = 'A' if self.is_machine_a else 'B'
-                active_positions = [(i+1, pos) for i, pos in enumerate(positions) if pos != 0.0]
-                if active_positions:
-                    pos_str = ', '.join(f'M{motor_id}:{pos:.3f}' for motor_id, pos in active_positions)
-                    self.node.get_logger().info(f"UDP RX [{machine}] <- {addr}: {pos_str}")
-                else:
-                    self.node.get_logger().info(f"UDP RX [{machine}] <- {addr}: todas posiciones en 0")
+                unpacked_data = struct.unpack(format_str, data)
+                positions = unpacked_data[:-1]
+                received_timestamp = unpacked_data[-1]
+
+                if self.debug_udp_latency:
+                    if self.is_machine_a:
+                        if received_timestamp > 0:
+                            rtt_s = (reception_time.nanoseconds / 1e9) - received_timestamp
+                            latency_ms = (rtt_s / 2.0) * 1000.0
+                            if 0 < latency_ms < 1000:
+                                self.latency_sum += latency_ms
+                                self.latency_packet_count += 1
+                            else:
+                                if not hasattr(self, '_rtt_warn_count'): self._rtt_warn_count = 0
+                                if self._rtt_warn_count % 100 == 0:
+                                    self.node.get_logger().warning(f"Latencia RTT/2 anómala o inicial: {latency_ms:.2f}ms")
+                                self._rtt_warn_count += 1
+                    else:
+                        self.timestamp_to_echo = received_timestamp
+
+                    current_time_s = reception_time.nanoseconds / 1e9
+                    if self.is_machine_a and (current_time_s - self.last_latency_log_time) >= 1.0:
+                        if self.latency_packet_count > 0:
+                            avg_latency = self.latency_sum / self.latency_packet_count
+                            self.node.get_logger().info(
+                                f"UDP Stats (último seg): "
+                                f"Latencia RTT/2 avg={avg_latency:.2f}ms | "
+                                f"Paquetes={self.latency_packet_count}/s"
+                            )
+                        self.latency_sum = 0.0
+                        self.latency_packet_count = 0
+                        self.last_latency_log_time = current_time_s
                 
-        except socket.timeout:
-            if not hasattr(self, '_timeout_count'):
-                self._timeout_count = 0
-            self._timeout_count += 1
-            
-            if self._timeout_count % 1000 == 0:
-                self.node.get_logger().debug(f"UDP RX timeouts: {self._timeout_count}")
-                
-        except Exception as e:
-            self.node.get_logger().warning(f"Error recibiendo posiciones: {e}")
+                self.udp_receive_queue.put(positions)
+                    
+            except socket.timeout:
+                continue
+            except Exception as e:
+                if not self.stop_thread.is_set():
+                    self.node.get_logger().warning(f"Error en el hilo receptor de UDP: {e}")
+        self.node.get_logger().info("Hilo receptor de UDP terminado.")
 
     def update_target_positions(self):
-        """Actualiza posiciones objetivo con validación flexible según número de motores"""
-        with self.data_lock:
-            if not self.received_data:
-                return False
+        """Actualiza posiciones objetivo desde la cola de datos recibidos, usando solo el más reciente."""
+        if self.udp_receive_queue.empty():
+            return False
+        
+        # Vaciar la cola para procesar solo el último mensaje y reducir latencia
+        latest_entry = None
+        while not self.udp_receive_queue.empty():
+            try:
+                latest_entry = self.udp_receive_queue.get_nowait()
+            except queue.Empty:
+                break
+        
+        if latest_entry is not None:
+            entry = latest_entry
+            # Actualizar posiciones objetivo con validación básica
+            while len(self.target_positions) < len(entry):
+                self.target_positions.append(0.0)
             
-            # Procesar datos recibidos
-            for entry in self.received_data:
-                # Actualizar posiciones objetivo con validación básica
-                # Expandir target_positions si es necesario
-                while len(self.target_positions) < len(entry):
-                    self.target_positions.append(0.0)
+            for i in range(len(entry)):
+                received_position = entry[i]
                 
-                for i in range(len(entry)):
-                    received_position = entry[i]
-                    
-                    # Aplicar límites básicos de seguridad para cualquier motor
-                    if received_position > -3.15 and received_position < 3.15:  # Límites generales ±π
-                        if i < len(self.target_positions):
-                            self.target_positions[i] = received_position
-            
-            # Limpiar datos procesados
-            self.received_data.clear()
-            return True
+                # Aplicar límites básicos de seguridad
+                if -3.15 < received_position < 3.15:  # Límites generales ±π
+                    if i < len(self.target_positions):
+                        self.target_positions[i] = received_position
+        
+        return True
 
     def calculate_control_currents(self):
         """Calcula corrientes de control usando algoritmo PD exacto del pd_control_node.py"""
@@ -686,50 +663,45 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             return False
 
     def initialise(self) -> None:
-        """Inicializar teleoperación remota según secuencia del código de referencia"""
+        """Inicializar teleoperación remota de forma optimizada."""
         self.node.get_logger().info("Iniciando teleoperación remota...")
         self.running = True
         self.communication_error_count = 0
         
-        # Usar hardware_manager mejorado en lugar de conexión directa Pybear
         if self.hardware_manager:
-            self.node.get_logger().info("✅ Usando hardware_manager mejorado con patrones pd_control_node.py")
+            self.node.get_logger().info("✅ Usando hardware_manager.")
         else:
             self.node.get_logger().warning("⚠️ Hardware manager no disponible - modo simulación")
         
-        # Paso 1: Zero position como en código de referencia
         if not self.zero_position():
             self.node.get_logger().error("Error en zero_position")
             self.running = False
             return
         
-        # Paso 2: Configurar control de corriente
         if not self.setup_current_control():
             self.node.get_logger().error("Error configurando control de corriente")
             self.running = False
             return
         
-        # Paso 3: Configurar comunicación UDP
         if not self.setup_udp_communication():
             self.node.get_logger().error("Error configurando UDP")
             self.running = False
             return
         
-        # Paso 4: Obtener posiciones iniciales
+        # Iniciar hilo receptor de UDP
+        self.stop_thread.clear()
+        self.receive_thread = threading.Thread(target=self._udp_receiver_loop, daemon=True)
+        self.receive_thread.start()
+        
         if not self.get_motor_states():
-            self.node.get_logger().warning("Error obteniendo estados iniciales - continuando")
-            # Inicializar con ceros solo para motores locales
+            self.node.get_logger().warning("Error obteniendo estados iniciales - continuando con ceros.")
             self.current_positions = [0.0] * len(self.motor_ids)
             self.current_velocities = [0.0] * len(self.motor_ids)
         
-        # Inicializar posiciones objetivo con tamaño del sistema total
         self.target_positions = [0.0] * self.num_total_motors
-        
-        # Inicializar estimadores de velocidad (del pd_control_node.py)
         self.theta_estimators = [0.0] * len(self.motor_ids)
         self.vel_estimators = [0.0] * len(self.motor_ids)
 
-        # Resetear estadísticas de latencia
         if self.debug_udp_latency:
             self.latency_sum = 0.0
             self.latency_packet_count = 0
@@ -741,46 +713,29 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         self.node.get_logger().info(f"Local: {self.local_ip}:{self.receive_port} -> Remoto: {self.local_addr}")
 
     def update(self) -> py_trees.common.Status:
-        """Bucle principal siguiendo exactamente la estructura del código de referencia"""
+        """Bucle principal optimizado para baja latencia."""
         if not self.running:
             return py_trees.common.Status.SUCCESS
         
-        # Verificar entrada del usuario para terminar - COMENTADO para ROS
-        # En ROS no necesitamos esta verificación de stdin ya que el comportamiento
-        # se maneja a través de la state machine
-        # if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
-        #     line = sys.stdin.readline().strip()
-        #     self.node.get_logger().info("Terminado por usuario")
-        #     self.running = False
-        #     return py_trees.common.Status.SUCCESS
-        
         try:
-            # Paso 1: Obtener estados actuales de motores (como en while True del código original)
+            # Paso 1: Obtener estados actuales de motores
             if not self.get_motor_states():
                 self.communication_error_count += 1
                 return py_trees.common.Status.RUNNING
             
-            # Paso 2: Comunicación UDP en hilos separados (como en código de referencia)
-            send_thread = threading.Thread(target=self.send_positions, daemon=True)
-            receive_thread = threading.Thread(target=self.receive_positions, daemon=True)
+            # Paso 2: Enviar posiciones actuales (no bloqueante)
+            self.send_positions()
             
-            receive_thread.start()
-            send_thread.start()
-            
-            # Paso 3: Procesar datos recibidos y aplicar límites
+            # Paso 3: Procesar datos recibidos de la cola (usando el más reciente)
             self.update_target_positions()
             
-            # Esperar a que terminen los hilos
-            send_thread.join()
-            receive_thread.join()
-            
-            # Paso 4: Calcular y enviar corrientes PD (como pd_control_node.py)
+            # Paso 4: Calcular y enviar corrientes de control
             control_currents = self.calculate_control_currents()
             self.send_current_commands(control_currents)
             
             # Reset contador de errores gradualmente si llegamos aquí sin problemas
             if self.communication_error_count > 0:
-                self.communication_error_count = max(0, self.communication_error_count - 2)  # Reducir más rápido
+                self.communication_error_count = max(0, self.communication_error_count - 2)
             
         except KeyboardInterrupt:
             self.node.get_logger().info("Terminando comunicación...")
@@ -792,12 +747,10 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.communication_error_count += 1
             
             if self.communication_error_count >= self.max_communication_errors:
-                self.node.get_logger().error("Demasiados errores de comunicación")
+                self.node.get_logger().error("Demasiados errores de comunicación, terminando.")
                 self.running = False
                 return py_trees.common.Status.FAILURE
         
-        # SIN THROTTLE: Permitir que py_trees maneje la frecuencia naturalmente
-        # Igual que pd_control_node.py que funciona perfecto
         return py_trees.common.Status.RUNNING
 
     def restore_position_control(self):
@@ -840,28 +793,38 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.node.get_logger().error(f"Error restaurando control: {e}")
 
     def terminate(self, new_status: py_trees.common.Status) -> None:
-        """Terminar teleoperación como secuencia del código de referencia"""
+        """Terminar teleoperación de forma segura."""
         self.node.get_logger().info(f"Terminando teleoperación remota con estado {new_status}")
         self.running = False
         
-        # Cerrar sockets UDP
+        # 1. Detener el hilo receptor
+        self.stop_thread.set()
+        
+        # 2. Cerrar sockets para desbloquear el hilo si está en recvfrom()
         try:
             if self.send_socket:
                 self.send_socket.close()
                 self.send_socket = None
             if self.receive_socket:
+                # Cierre del socket de recepción fuerza la salida del hilo
                 self.receive_socket.close()
                 self.receive_socket = None
-            self.node.get_logger().info("Sockets UDP cerrados correctamente")
+            self.node.get_logger().info("Sockets UDP cerrados.")
         except Exception as e:
             self.node.get_logger().warning(f"Error cerrando sockets: {e}")
+
+        # 3. Esperar a que el hilo termine limpiamente
+        if self.receive_thread and self.receive_thread.is_alive():
+            self.receive_thread.join(timeout=1.0)
+            if self.receive_thread.is_alive():
+                self.node.get_logger().warning("El hilo receptor de UDP no terminó a tiempo.")
         
-        # Restaurar control de posición y ir a home
+        # 4. Restaurar control de posición y ir a home
         try:
             self.restore_position_control()
         except Exception as e:
-            self.node.get_logger().error(f"Error en restauración: {e}")
+            self.node.get_logger().error(f"Error en restauración de control: {e}")
         
-        # Destruir nodo solo si lo creamos
+        # 5. Destruir nodo si es propio
         if self.own_node and self.node:
             self.node.destroy_node()
