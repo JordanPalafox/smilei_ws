@@ -87,6 +87,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         self.debug_udp_latency = False
         self.debug_pd_control = False
         self.last_packet_time = None
+        
         # Atributos para resumen de latencia simplificado
         self.latency_sum = 0.0
         self.latency_packet_count = 0
@@ -324,36 +325,36 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             return True
 
     def send_positions(self):
-        """Envía posiciones vía UDP con formato flexible según número de motores"""
+        """Envía posiciones y timestamp vía UDP con formato flexible."""
         if not self.send_socket:
             return
         
         try:
             # Preparar posiciones locales para enviar
-            # Crear array del tamaño máximo y llenar con posiciones de motores locales
             positions_to_send = [0.0] * max(self.max_total_motors, self.num_total_motors)
             
-            # Llenar con posiciones reales de motores locales usando sus IDs como índices
+            # Llenar con posiciones reales de motores locales
             for i, motor_id in enumerate(self.motor_ids):
                 if i < len(self.current_positions) and motor_id <= len(positions_to_send):
-                    # Usar el ID del motor como índice en el array UDP (motor_id - 1 para base 0)
                     motor_index = motor_id - 1
                     if motor_index >= 0 and motor_index < len(positions_to_send):
                         positions_to_send[motor_index] = self.current_positions[i]
+
+            # Añadir timestamp al final del payload. time.time() es un float.
+            data_to_send = positions_to_send + [time.time()]
             
-            # Crear formato dinámico basado en número de motores a enviar
-            format_str = f'{len(positions_to_send)}f'
+            # Crear formato dinámico
+            format_str = f'{len(data_to_send)}f'
             
             # Empaquetar y enviar
-            struct_ql = struct.pack(format_str, *positions_to_send)
+            struct_ql = struct.pack(format_str, *data_to_send)
             self.send_socket.sendto(struct_ql, self.local_addr)
             
-            # Log ocasional para debug
+            # Log ocasional para debug (sin mostrar el timestamp)
             if not hasattr(self, '_send_count'):
                 self._send_count = 0
             self._send_count += 1
             if self._send_count % 100 == 0:
-                # Mostrar posiciones de todos los motores activos
                 active_positions = [(i+1, pos) for i, pos in enumerate(positions_to_send) if pos != 0.0]
                 machine = 'A' if self.is_machine_a else 'B'
                 if active_positions:
@@ -375,30 +376,40 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.node.get_logger().warning(f"Error enviando posiciones: {e}")
 
     def receive_positions(self):
-        """Recibe posiciones con formato flexible según número de motores"""
+        """Recibe posiciones, extrae timestamp y calcula latencia one-way."""
         if not self.receive_socket:
             return
         
         try:
             data, addr = self.receive_socket.recvfrom(1024)
+            reception_time = time.time()
+
+            # Calcular número de floats recibidos
+            num_floats = len(data) // 4
+            if num_floats == 0:
+                return  # Paquete vacío, ignorar
+
+            format_str = f'{num_floats}f'
+            unpacked_data = struct.unpack(format_str, data)
+            
+            # El último float es el timestamp, el resto son posiciones
+            positions = unpacked_data[:-1]
+            send_time = unpacked_data[-1]
 
             if self.debug_udp_latency:
-                current_time = time.time()
-                if self.last_packet_time is not None:
-                    time_diff_ms = (current_time - self.last_packet_time) * 1000
-                    self.latency_sum += time_diff_ms
-                    self.latency_packet_count += 1
-                
-                self.last_packet_time = current_time
+                # Calcular latencia one-way en milisegundos
+                latency_ms = (reception_time - send_time) * 1000
+                self.latency_sum += latency_ms
+                self.latency_packet_count += 1
 
                 # Loguear resumen de estadísticas cada segundo
-                if current_time - self.last_latency_log_time >= 1.0:
+                if reception_time - self.last_latency_log_time >= 1.0:
                     if self.latency_packet_count > 0:
                         avg_latency = self.latency_sum / self.latency_packet_count
                         
                         self.node.get_logger().info(
                             f"UDP Stats (último seg): "
-                            f"Latencia avg={avg_latency:.2f}ms | "
+                            f"Latencia one-way avg={avg_latency:.2f}ms | "
                             f"Paquetes={self.latency_packet_count}/s"
                         )
                         
@@ -406,26 +417,19 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                         self.latency_sum = 0.0
                         self.latency_packet_count = 0
                     
-                    self.last_latency_log_time = current_time
-            
-            # Calcular número de floats recibidos basado en tamaño de datos
-            num_floats = len(data) // 4  # Cada float son 4 bytes
-            format_str = f'{num_floats}f'
-            
-            # Desempaquetar datos recibidos
-            struct_qr = struct.unpack(format_str, data)
+                    self.last_latency_log_time = reception_time
             
             with self.data_lock:
-                self.received_data.append(struct_qr)
+                self.received_data.append(positions)
                 
-            # Log ocasional para debug
+            # Log ocasional para debug (usando `positions`)
             if not hasattr(self, '_recv_count'):
                 self._recv_count = 0
             self._recv_count += 1
             if self._recv_count % 100 == 0:
                 machine = 'A' if self.is_machine_a else 'B'
                 # Mostrar posiciones de todos los motores con datos no cero
-                active_positions = [(i+1, pos) for i, pos in enumerate(struct_qr) if pos != 0.0]
+                active_positions = [(i+1, pos) for i, pos in enumerate(positions) if pos != 0.0]
                 if active_positions:
                     pos_str = ', '.join(f'M{motor_id}:{pos:.3f}' for motor_id, pos in active_positions)
                     self.node.get_logger().info(f"UDP RX [{machine}] <- {addr}: {pos_str}")
@@ -433,10 +437,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                     self.node.get_logger().info(f"UDP RX [{machine}] <- {addr}: todas posiciones en 0")
                 
         except socket.timeout:
-            if self.debug_udp_latency:
-                self.last_packet_time = None # Reset timer on timeout
-
-            # Timeout normal - no hacer nada, pero contar para debug
+            # Ya no se necesita resetear last_packet_time
             if not hasattr(self, '_timeout_count'):
                 self._timeout_count = 0
             self._timeout_count += 1
