@@ -71,7 +71,6 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         self.max_current = 5.0              # Límite máximo de corriente (A)
         self.error_deadband = 0.05          # Zona muerta para errores pequeños (rad)
         self.max_error = 1.57               # Error máximo permitido (π/2 rad)
-        self.joint_limits = {}              # Límites de posición de articulaciones, cargados desde params
         
         # Variables de estado de motores
         self.current_positions = [0.0] * 8
@@ -115,7 +114,6 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.node.declare_parameter('remote_teleoperation.max_total_motors', 8)  # Máximo de motores en el sistema
             self.node.declare_parameter('remote_teleoperation.debug_udp_latency', False)
             self.node.declare_parameter('remote_teleoperation.debug_pd_control', False)
-            self.node.declare_parameter('joint_limits', rclpy.Parameter.Type.PARAMETER_NOT_SET)
             
             # Cargar parámetros
             param_motor_ids = self.node.get_parameter('remote_teleoperation.motor_ids').value
@@ -126,23 +124,6 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.max_total_motors = self.node.get_parameter('remote_teleoperation.max_total_motors').value
             self.debug_udp_latency = self.node.get_parameter('remote_teleoperation.debug_udp_latency').value
             self.debug_pd_control = self.node.get_parameter('remote_teleoperation.debug_pd_control').value
-
-            # Cargar y parsear límites de articulaciones
-            try:
-                # El parámetro es un diccionario de strings a listas de floats
-                joint_limits_param = self.node.get_parameter('joint_limits').value
-                self.joint_limits = self._parse_joint_limits(joint_limits_param)
-                if self.joint_limits:
-                    self.node.get_logger().info(f"Límites de articulación cargados: {self.joint_limits}")
-                else:
-                    self.node.get_logger().warning("No se cargaron límites de articulación. Verifique el formato en YAML (ej: motor_1: [min, max]).")
-            except rclpy.exceptions.ParameterNotDeclaredException:
-                 self.node.get_logger().warning("Parámetro 'joint_limits' no encontrado. Usando límites por defecto.")
-                 self.joint_limits = {}
-            except Exception as e:
-                self.node.get_logger().error(f"Error cargando 'joint_limits': {e}")
-                self.joint_limits = {}
-
             if self.debug_udp_latency:
                 self.node.get_logger().info("Depuración de latencia UDP ACTIVADA.")
             if self.debug_pd_control:
@@ -264,25 +245,6 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         except Exception as e:
             self.node.get_logger().error(f"Error en zero_position: {str(e)}")
             return False
-
-    def _parse_joint_limits(self, joint_limits_param) -> dict:
-        """Parsea los límites de articulación desde el parámetro ROS a un diccionario de id_motor -> [min, max]."""
-        limits = {}
-        if not isinstance(joint_limits_param, dict):
-            self.node.get_logger().warning(f"Formato de 'joint_limits' inesperado, se esperaba un diccionario.")
-            return limits
-
-        for key, value in joint_limits_param.items():
-            if str(key).startswith('motor_'):
-                try:
-                    motor_id = int(str(key).split('_')[1])
-                    if isinstance(value, list) and len(value) == 2:
-                        limits[motor_id] = [float(v) for v in value]
-                    else:
-                        self.node.get_logger().warning(f"Valor de límite inválido para '{key}': se esperaba una lista de 2 números.")
-                except (ValueError, IndexError):
-                    self.node.get_logger().warning(f"No se pudo parsear el ID de motor desde la llave '{key}'.")
-        return limits
 
     def setup_current_control(self):
         """Configuración de motores usando parámetros exactos del pd_control_node.py"""
@@ -493,37 +455,17 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         
         if latest_entry is not None:
             entry = latest_entry
-            # Actualizar posiciones objetivo con validación de límites
+            # Actualizar posiciones objetivo con validación básica
             while len(self.target_positions) < len(entry):
                 self.target_positions.append(0.0)
             
             for i in range(len(entry)):
                 received_position = entry[i]
-                motor_id = i + 1  # motor_id es 1-based
-
-                # Aplicar límites de seguridad desde parámetros
-                if motor_id in self.joint_limits:
-                    min_lim, max_lim = self.joint_limits[motor_id]
-                    clipped_position = max(min_lim, min(max_lim, received_position))
-                    
-                    if clipped_position != received_position:
-                        # Loguear si se recorta la posición, pero no en cada ciclo
-                        if not hasattr(self, '_clip_count'): self._clip_count = {}
-                        self._clip_count.setdefault(motor_id, 0)
-                        if self._clip_count[motor_id] % 500 == 0: # Loguear cada 500 ocurrencias
-                            self.node.get_logger().warning(
-                                f"Posición para motor {motor_id} ({received_position:.3f}) fuera de los límites "
-                                f"[{min_lim:.3f}, {max_lim:.3f}]. Recortada a {clipped_position:.3f}."
-                            )
-                        self._clip_count[motor_id] += 1
-                    
-                    received_position = clipped_position
-                else:
-                    # Fallback a límites generales si no hay específicos para este motor
-                    received_position = max(-3.15, min(3.15, received_position))
-
-                if i < len(self.target_positions):
-                    self.target_positions[i] = received_position
+                
+                # Aplicar límites básicos de seguridad
+                if -3.15 < received_position < 3.15:  # Límites generales ±π
+                    if i < len(self.target_positions):
+                        self.target_positions[i] = received_position
         
         return True
 
