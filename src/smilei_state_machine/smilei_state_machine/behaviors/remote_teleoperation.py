@@ -71,6 +71,11 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         self.max_current = 5.0              # Límite máximo de corriente (A)
         self.error_deadband = 0.05          # Zona muerta para errores pequeños (rad)
         self.max_error = 1.57               # Error máximo permitido (π/2 rad)
+        self.joint_limits = {}
+        self.joint_limit_keys = {
+            1: 'q_l1', 2: 'q_l2', 3: 'q_l3', 4: 'q_l4',
+            5: 'q_r1', 6: 'q_r2', 7: 'q_r3', 8: 'q_r4'
+        }
         
         # Variables de estado de motores
         self.current_positions = [0.0] * 8
@@ -129,6 +134,19 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             if self.debug_pd_control:
                 self.node.get_logger().info("Depuración de control PD ACTIVADA.")
             
+            # Cargar límites de articulaciones
+            self.node.get_logger().info("Cargando límites de articulaciones desde parámetros...")
+            for joint_name, default_limits in {
+                'q_l1': [-1.5708, 1.5708], 'q_l2': [-1.5708, 0.7854],
+                'q_l3': [-1.5708, 2.3562], 'q_l4': [-1.5708, 1.5708],
+                'q_r1': [-1.5708, 1.5708], 'q_r2': [-0.7854, 1.5708],
+                'q_r3': [-2.3562, 1.5708], 'q_r4': [-1.5708, 1.5708]
+            }.items():
+                param_name = f'joint_limits.{joint_name}'
+                self.node.declare_parameter(param_name, default_limits)
+                self.joint_limits[joint_name] = self.node.get_parameter(param_name).value
+            self.node.get_logger().info(f"Límites de articulaciones cargados: {self.joint_limits}")
+
             # Obtener motores disponibles del hardware manager
             if self.hardware_manager:
                 available_motors = self.hardware_manager.get_available_motors()
@@ -461,11 +479,23 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             
             for i in range(len(entry)):
                 received_position = entry[i]
-                
-                # Aplicar límites básicos de seguridad
-                if -3.15 < received_position < 3.15:  # Límites generales ±π
+                motor_id = i + 1  # El índice i corresponde al motor_id - 1
+
+                # Aplicar límites de seguridad desde los parámetros cargados
+                joint_name = self.joint_limit_keys.get(motor_id)
+                if joint_name and joint_name in self.joint_limits:
+                    min_lim, max_lim = self.joint_limits[joint_name]
+                    
+                    # Limitar la posición recibida a la región segura
+                    clamped_position = max(min_lim, min(received_position, max_lim))
+                    
                     if i < len(self.target_positions):
-                        self.target_positions[i] = received_position
+                        self.target_positions[i] = clamped_position
+                else:
+                    # Fallback a límites generales si no se encuentran límites específicos
+                    if -3.15 < received_position < 3.15:
+                        if i < len(self.target_positions):
+                            self.target_positions[i] = received_position
         
         return True
 
