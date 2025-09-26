@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  smilei_container:
+    image: smilei_image
+    container_name: smilei_ros2_container  
+    build: 
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - ROS_DISTRO=${ROS_DISTRO}
+        - USERNAME=${DOCKER_USER}
+        - USER_UID=${USER_UID}
+        - USER_GID=${USER_GID}
+    # stdin_opne and tty are necessary for an interactive terminal
+    stdin_open: true 
+    tty: true
+    # Allow the container to use the host's X server
+    environment:
+      - DISPLAY=${DISPLAY}
+    network_mode: host
+    volumes:
+      # Mount the ROS2 workspace in the container
+      - ./src:/home/${DOCKER_USER}/smilei_ws/src
+      # Mount the device directory to allow access to hardware devices
+      - "/dev:/dev"      
+      # Allow the container to access the X server
+      - /tmp/.X11-unix:/tmp/.X11-unix
+
+    # Rule that grants the container permissions to read (r), write (w), and create (m)
+    # character device nodes (c) for devices with major group 188.
+    device_cgroup_rules:
+      - 'c 188:* rwm'
