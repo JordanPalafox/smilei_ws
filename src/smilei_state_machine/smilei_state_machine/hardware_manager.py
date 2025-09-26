@@ -102,7 +102,8 @@ class HardwareManager:
                 for motor_id in range(1, self.max_motor_scan_range + 1):
                     try:
                         result = manager.ping(motor_id)
-                        if result and len(result) > 0 and result[0] is not None:
+                        # Usar la misma lógica que ping.py: verificar result[0][1]
+                        if result and len(result) > 0 and len(result[0]) > 1 and result[0][1] is not None:
                             detected_motors.append(motor_id)
                     except Exception:
                         continue
