@@ -1,5 +1,5 @@
 ARG ROS_DISTRO=humble
-FROM osrf/ros:humble-desktop-full
+FROM dustynv/ros:humble-desktop-l4t-r36.4.0
 
 # Set environment variables
 ENV LANG=C.UTF-8
@@ -7,6 +7,9 @@ ENV LC_ALL=C.UTF-8
 ENV DEBIAN_FRONTEND=noninteractive
 # Set timezone to Coordinated Universal Time (UTC)
 ENV TZ=Etc/UTC
+
+# Update ROS2 GPG key
+RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
 
 # Install essential packages and colcon
 RUN apt-get update \
@@ -23,12 +26,17 @@ RUN apt-get update \
     cmake \
     python3-colcon-common-extensions \
     # Install ros2 packages
-    ros-${ROS_DISTRO}-foxglove-bridge \ 
+    ros-${ROS_DISTRO}-foxglove-bridge \
     ros-${ROS_DISTRO}-py-trees \
     ros-${ROS_DISTRO}-py-trees-ros-interfaces \
     ros-${ROS_DISTRO}-py-trees-ros \
     ros-${ROS_DISTRO}-py-trees-ros-tutorials \
     ros-${ROS_DISTRO}-py-trees-ros-viewer \
+    ros-${ROS_DISTRO}-rosidl-default-generators \
+    ros-${ROS_DISTRO}-rosidl-default-runtime \
+    ros-${ROS_DISTRO}-ament-lint-auto \
+    ros-${ROS_DISTRO}-ament-lint-common \
+    ros-${ROS_DISTRO}-example-interfaces \
     && rm -rf /var/lib/apt/lists/*
 
 
@@ -55,9 +63,8 @@ RUN usermod -aG dialout ${DOCKER_USER}
 # Install PyBEAR
 # Clonar solo la versión específica y con una profundidad mínima para ahorrar tiempo y espacio
 RUN git clone --depth 1 --branch 0.1.3 https://github.com/Westwood-Robotics/PyBEAR.git /tmp/PyBEAR && \
-    # Instalar el paquete directamente desde la carpeta clonada
-    # pip se encargará de instalar las dependencias definidas en el paquete
-    pip3 install /tmp/PyBEAR && \
+    # Instalar el paquete directamente desde la carpeta clonada usando PyPI estándar
+    pip3 install --index-url https://pypi.org/simple/ /tmp/PyBEAR && \
     # --- Limpieza Crucial ---
     # Eliminar el código fuente que ya no es necesario
     rm -rf /tmp/PyBEAR && \
