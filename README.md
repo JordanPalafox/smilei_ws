@@ -65,11 +65,11 @@ source install/setup.bash
 
 ## Creacion de contenedor Docker (opcional)
 
+**ℹ️ Nota:** Para usar un contenedor para una **Jetson** debes usar el Dockerfile específico para Jetson que se encuentra en la rama `jetson-container`. Hecho esto, puedes seguir los mismos pasos que se indican a continuación.
+
 Se proporciona un `Dockerfile` y un archivo de `docker-compose.yml` para crear un contenedor con todo el entorno configurado, listo para la teleoperación del robot SMILEi.
 
 Para usar Docker, asegúrate de tener Docker y Docker Compose instalados en tu sistema.
-
-**ℹ️ Nota:** Para usar un contenedor para una **Jetson** debes usar el Dockerfile específico para Jetson que se encuentra en la rama `jetson-container`. Hecho esto, puedes seguir los mismos pasos que se indican a continuación.
 
 Puedes saber esto con los siguientes comandos:
 
