@@ -462,7 +462,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         """Actualiza posiciones objetivo desde la cola de datos recibidos, usando solo el más reciente."""
         if self.udp_receive_queue.empty():
             return False
-        
+
         # Vaciar la cola para procesar solo el último mensaje y reducir latencia
         latest_entry = None
         while not self.udp_receive_queue.empty():
@@ -470,33 +470,38 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 latest_entry = self.udp_receive_queue.get_nowait()
             except queue.Empty:
                 break
-        
+
         if latest_entry is not None:
             entry = latest_entry
             # Actualizar posiciones objetivo con validación básica
             while len(self.target_positions) < len(entry):
                 self.target_positions.append(0.0)
-            
+
             for i in range(len(entry)):
                 received_position = entry[i]
                 motor_id = i + 1  # El índice i corresponde al motor_id - 1
 
-                # Aplicar límites de seguridad desde los parámetros cargados
-                joint_name = self.joint_limit_keys.get(motor_id)
-                if joint_name and joint_name in self.joint_limits:
-                    min_lim, max_lim = self.joint_limits[joint_name]
-                    
-                    # Limitar la posición recibida a la región segura
-                    clamped_position = max(min_lim, min(received_position, max_lim))
-                    
-                    if i < len(self.target_positions):
-                        self.target_positions[i] = clamped_position
-                else:
-                    # Fallback a límites generales si no se encuentran límites específicos
-                    if -3.15 < received_position < 3.15:
-                        if i < len(self.target_positions):
-                            self.target_positions[i] = received_position
-        
+                # LÍMITES DE SEGURIDAD DESHABILITADOS - TELEOPERACIÓN SIN RESTRICCIONES
+                # Aplicar directamente la posición recibida sin límites
+                if i < len(self.target_positions):
+                    self.target_positions[i] = received_position
+
+                # CÓDIGO ORIGINAL COMENTADO (límites de seguridad):
+                # joint_name = self.joint_limit_keys.get(motor_id)
+                # if joint_name and joint_name in self.joint_limits:
+                #     min_lim, max_lim = self.joint_limits[joint_name]
+                #
+                #     # Limitar la posición recibida a la región segura
+                #     clamped_position = max(min_lim, min(received_position, max_lim))
+                #
+                #     if i < len(self.target_positions):
+                #         self.target_positions[i] = clamped_position
+                # else:
+                #     # Fallback a límites generales si no se encuentran límites específicos
+                #     if -3.15 < received_position < 3.15:
+                #         if i < len(self.target_positions):
+                #             self.target_positions[i] = received_position
+
         return True
 
     def calculate_control_currents(self):
@@ -535,13 +540,15 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
 
                     # Control PD no lineal exacto (pd_control_node.py líneas 143-144)
                     tau = -kp_value * ((abs(error)**self.p1) * np.sign(error)) - self.kd * vel_estimate
-                    
+
                     # Convertir torque a corriente (pd_control_node.py líneas 147-148)
                     current = tau / self.Kt
-                    
-                    # Límites de seguridad
-                    current = max(-self.max_current, min(self.max_current, current))
-                    
+
+                    # LÍMITES DE CORRIENTE DESHABILITADOS - TELEOPERACIÓN SIN RESTRICCIONES
+                    # No se aplican límites a la corriente calculada
+                    # CÓDIGO ORIGINAL COMENTADO:
+                    # current = max(-self.max_current, min(self.max_current, current))
+
                     currents.append(current)
                     
                     # Debug cada 100 iteraciones - mostrar info para cada motor
