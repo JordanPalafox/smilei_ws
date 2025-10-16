@@ -25,7 +25,7 @@ class UDPTester:
     
     def __init__(self):
         # Usar valores por defecto para máquina A
-        self.local_ip = '192.168.0.144'
+        self.local_ip = '192.168.0.100'
         self.remote_ip = '192.168.4.238'
         self.send_port = 4000
         self.receive_port = 5001
@@ -149,7 +149,7 @@ def main():
     if args.mode == 'config':
         print("📋 CONFIGURACIÓN ACTUAL")
         print("   Configuración por defecto para máquina A:")
-        print(f"   - IP Local: 192.168.0.144")
+        print(f"   - IP Local: 192.168.0.100")
         print(f"   - IP Remota: 192.168.4.238")
         print(f"   - Puerto Envío: 4000")
         print(f"   - Puerto Recepción: 5001")

@@ -113,7 +113,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             # Usar lista de enteros por defecto para evitar problemas de tipos
             self.node.declare_parameter('remote_teleoperation.motor_ids', [1, 2, 3, 4, 5, 6, 7, 8])  # Por defecto todos los motores
             self.node.declare_parameter('remote_teleoperation.use_all_motors', True)  # True = usar todos los motores disponibles
-            self.node.declare_parameter('remote_teleoperation.operador_ip', '192.168.0.144')
+            self.node.declare_parameter('remote_teleoperation.operador_ip', '192.168.0.100')
             self.node.declare_parameter('remote_teleoperation.seguidor_ip', '192.168.0.2')
             self.node.declare_parameter('remote_teleoperation.max_total_motors', 8)  # Máximo de motores en el sistema
             self.node.declare_parameter('remote_teleoperation.debug_udp_latency', False)

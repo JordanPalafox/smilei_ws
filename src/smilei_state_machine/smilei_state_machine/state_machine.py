@@ -187,7 +187,7 @@ def ip_config_callback(msg, node):
     import json
     try:
         config = json.loads(msg.data)
-        operador_ip = config.get("operador_ip", "192.168.0.144")
+        operador_ip = config.get("operador_ip", "192.168.0.100")
         seguidor_ip = config.get("seguidor_ip", "192.168.0.2")
 
         # Actualizar parámetros ROS

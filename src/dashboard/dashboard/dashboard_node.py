@@ -43,7 +43,7 @@ class DashboardNode(Node):
         self.launch_running = False
 
         # IP Configuration for remote teleoperation
-        self.operador_ip = "192.168.0.144"
+        self.operador_ip = "192.168.0.100"
         self.seguidor_ip = "192.168.0.2"
 
         # Publishers and subscribers (will be updated when robot changes)
