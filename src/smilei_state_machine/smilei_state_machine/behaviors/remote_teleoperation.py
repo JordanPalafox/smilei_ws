@@ -111,24 +111,41 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         try:
             # Declarar parámetros - configuración flexible para número de motores
             # Usar lista de enteros por defecto para evitar problemas de tipos
-            self.node.declare_parameter('remote_teleoperation.motor_ids', [1, 2])  # Por defecto motores 1 y 2
-            self.node.declare_parameter('remote_teleoperation.use_all_motors', False)  # True = usar todos los motores disponibles
-            self.node.declare_parameter('remote_teleoperation.is_machine_a', True)
-            self.node.declare_parameter('remote_teleoperation.machine_a_ip', '192.168.0.144')
-            self.node.declare_parameter('remote_teleoperation.machine_b_ip', '192.168.0.2')
+            self.node.declare_parameter('remote_teleoperation.motor_ids', [1, 2, 3, 4, 5, 6, 7, 8])  # Por defecto todos los motores
+            self.node.declare_parameter('remote_teleoperation.use_all_motors', True)  # True = usar todos los motores disponibles
+            self.node.declare_parameter('remote_teleoperation.operador_ip', '192.168.0.144')
+            self.node.declare_parameter('remote_teleoperation.seguidor_ip', '192.168.0.2')
             self.node.declare_parameter('remote_teleoperation.max_total_motors', 8)  # Máximo de motores en el sistema
             self.node.declare_parameter('remote_teleoperation.debug_udp_latency', False)
             self.node.declare_parameter('remote_teleoperation.debug_pd_control', False)
-            
+
             # Cargar parámetros
             param_motor_ids = self.node.get_parameter('remote_teleoperation.motor_ids').value
             use_all_motors = self.node.get_parameter('remote_teleoperation.use_all_motors').value
-            self.is_machine_a = self.node.get_parameter('remote_teleoperation.is_machine_a').value
-            self.machine_a_ip = self.node.get_parameter('remote_teleoperation.machine_a_ip').value
-            self.machine_b_ip = self.node.get_parameter('remote_teleoperation.machine_b_ip').value
+            operador_ip = self.node.get_parameter('remote_teleoperation.operador_ip').value
+            seguidor_ip = self.node.get_parameter('remote_teleoperation.seguidor_ip').value
             self.max_total_motors = self.node.get_parameter('remote_teleoperation.max_total_motors').value
             self.debug_udp_latency = self.node.get_parameter('remote_teleoperation.debug_udp_latency').value
             self.debug_pd_control = self.node.get_parameter('remote_teleoperation.debug_pd_control').value
+
+            # Determinar si es Operador (Máquina A) o Seguidor (Máquina B) basado en el namespace
+            namespace = self.node.get_namespace()
+            if 'operador' in namespace:
+                self.is_machine_a = True
+                self.machine_a_ip = operador_ip
+                self.machine_b_ip = seguidor_ip
+                self.node.get_logger().info("Configurado como OPERADOR (Máquina A)")
+            elif 'seguidor' in namespace:
+                self.is_machine_a = False
+                self.machine_a_ip = operador_ip
+                self.machine_b_ip = seguidor_ip
+                self.node.get_logger().info("Configurado como SEGUIDOR (Máquina B)")
+            else:
+                # Fallback: usar el primer carácter del nombre del nodo o default
+                self.is_machine_a = True  # Default a operador si no se puede determinar
+                self.machine_a_ip = operador_ip
+                self.machine_b_ip = seguidor_ip
+                self.node.get_logger().warning(f"No se pudo determinar robot desde namespace '{namespace}', usando OPERADOR por defecto")
             if self.debug_udp_latency:
                 self.node.get_logger().info("Depuración de latencia UDP ACTIVADA.")
             if self.debug_pd_control:
