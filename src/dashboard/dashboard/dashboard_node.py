@@ -34,9 +34,11 @@ class DashboardNode(Node):
         # Robot selection: "operador" or "seguidor"
         self.selected_robot = "operador"
 
-        # State management
-        self.current_state = "idle"
+        # State management (protegido con lock para thread-safety)
+        self._state_lock = threading.Lock()
+        self._current_state = "idle"
         self.last_completed_state = None
+        self._last_state_update_time = None  # None = nunca ha recibido mensaje
 
         # Launch process management
         self.launch_process = None
@@ -78,9 +80,33 @@ class DashboardNode(Node):
         time.sleep(0.5)  # Esperar a que los subscribers se conecten
         self.update_ip_config(self.operador_ip, self.seguidor_ip)
 
+    @property
+    def current_state(self):
+        """Thread-safe getter para el estado actual"""
+        with self._state_lock:
+            return self._current_state
+
+    @current_state.setter
+    def current_state(self, value):
+        """Thread-safe setter para el estado actual"""
+        with self._state_lock:
+            self._current_state = value
+            self._last_state_update_time = time.time()
+
     def state_callback(self, msg):
-        """Callback for state updates"""
-        self.current_state = msg.data
+        """Callback for state updates (thread-safe)"""
+        with self._state_lock:
+            self._current_state = msg.data
+            self._last_state_update_time = time.time()
+
+    def is_state_machine_responsive(self, timeout_sec=2.0):
+        """Verifica si la state machine está respondiendo (último update reciente)"""
+        with self._state_lock:
+            # Si nunca ha recibido un mensaje, no está respondiendo
+            if self._last_state_update_time is None:
+                return False
+            time_since_update = time.time() - self._last_state_update_time
+            return time_since_update < timeout_sec
 
     def update_robot_topics(self):
         """Update publishers and subscribers based on selected robot"""
@@ -116,7 +142,10 @@ class DashboardNode(Node):
         if robot_name in ["operador", "seguidor"]:
             self.selected_robot = robot_name
             self.update_robot_topics()
-            self.current_state = "idle"  # Reset state when switching robots
+            # Reset state when switching robots - poner None hasta recibir mensaje del nuevo robot
+            with self._state_lock:
+                self._current_state = "idle"
+                self._last_state_update_time = None  # Esperar primer mensaje del nuevo robot
             return True
         else:
             self.get_logger().error(f'Invalid robot name: {robot_name}')
@@ -378,6 +407,28 @@ class DashboardGUI:
 
         imgui.text(f"Robot: {self.node.selected_robot.upper()}")
         imgui.text(f"Current State: {self.node.current_state}")
+
+        # Indicador de heartbeat (si la state machine está respondiendo)
+        with self.node._state_lock:
+            last_update = self.node._last_state_update_time
+
+        if last_update is None:
+            # Nunca ha recibido mensajes
+            imgui.push_style_color(imgui.COLOR_TEXT, 0.8, 0.6, 0.2, 1.0)  # Naranja
+            imgui.text("State Machine: WAITING...")
+            imgui.pop_style_color(1)
+        elif self.node.is_state_machine_responsive(timeout_sec=2.0):
+            # Respondiendo normalmente
+            imgui.push_style_color(imgui.COLOR_TEXT, 0.2, 0.8, 0.2, 1.0)  # Verde
+            imgui.text("State Machine: RESPONSIVE")
+            imgui.pop_style_color(1)
+        else:
+            # Dejó de responder
+            time_since = time.time() - last_update
+            imgui.push_style_color(imgui.COLOR_TEXT, 0.8, 0.2, 0.2, 1.0)  # Rojo
+            imgui.text(f"State Machine: TIMEOUT ({time_since:.1f}s)")
+            imgui.pop_style_color(1)
+
         imgui.separator()
 
         imgui.text("State Commands:")
