@@ -9,6 +9,11 @@ from rclpy.node import Node
 from std_msgs.msg import String
 import threading
 import time
+from collections import deque
+import numpy as np
+
+# ROS2 service imports
+from westwood_motor_interfaces.srv import GetMotorPositions, GetMotorVelocities, GetMotorCurrents, GetAvailableMotors
 
 # IMGUI imports
 try:
@@ -73,6 +78,31 @@ class DashboardNode(Node):
         # Publicar configuración de IPs inicial
         time.sleep(0.5)  # Esperar a que los subscribers se conecten
         self.update_ip_config(self.operador_ip, self.seguidor_ip)
+
+        # Motor monitoring data structures
+        self.motor_history_length = 100  # Número de muestras para las gráficas
+
+        # Data storage for each robot (operador and seguidor)
+        self.motor_data = {
+            'operador': {
+                'positions': {i: deque(maxlen=self.motor_history_length) for i in range(1, 9)},
+                'velocities': {i: deque(maxlen=self.motor_history_length) for i in range(1, 9)},
+                'currents': {i: deque(maxlen=self.motor_history_length) for i in range(1, 9)},
+                'available_motors': []
+            },
+            'seguidor': {
+                'positions': {i: deque(maxlen=self.motor_history_length) for i in range(1, 9)},
+                'velocities': {i: deque(maxlen=self.motor_history_length) for i in range(1, 9)},
+                'currents': {i: deque(maxlen=self.motor_history_length) for i in range(1, 9)},
+                'available_motors': []
+            }
+        }
+
+        # Service clients for motor data (for both robots)
+        self.setup_motor_service_clients()
+
+        # Timer for periodic motor data updates
+        self.motor_update_timer = self.create_timer(0.1, self.update_motor_data)  # 10 Hz update rate
 
     @property
     def current_state(self):
@@ -169,6 +199,98 @@ class DashboardNode(Node):
 
         self.get_logger().info(f'Updated IP config - Operador: {operador_ip}, Seguidor: {seguidor_ip}')
 
+    def setup_motor_service_clients(self):
+        """Setup service clients for motor data retrieval"""
+        self.motor_service_clients = {}
+
+        for robot_name in ['operador', 'seguidor']:
+            self.motor_service_clients[robot_name] = {
+                'positions': self.create_client(
+                    GetMotorPositions,
+                    f'/{robot_name}/westwood_motor/get_motor_positions'
+                ),
+                'velocities': self.create_client(
+                    GetMotorVelocities,
+                    f'/{robot_name}/westwood_motor/get_motor_velocities'
+                ),
+                'currents': self.create_client(
+                    GetMotorCurrents,
+                    f'/{robot_name}/westwood_motor/get_motor_currents'
+                ),
+                'available': self.create_client(
+                    GetAvailableMotors,
+                    f'/{robot_name}/westwood_motor/get_available_motors'
+                )
+            }
+
+        self.get_logger().info('Motor service clients created for operador and seguidor')
+
+    def update_motor_data(self):
+        """Periodic callback to update motor data from both robots"""
+        for robot_name in ['operador', 'seguidor']:
+            # Request data for motors 1-8
+            motor_ids = list(range(1, 9))
+
+            # Get positions
+            if self.motor_service_clients[robot_name]['positions'].service_is_ready():
+                request = GetMotorPositions.Request()
+                request.motor_ids = motor_ids
+                future = self.motor_service_clients[robot_name]['positions'].call_async(request)
+                future.add_done_callback(
+                    lambda f, rn=robot_name: self._handle_positions_response(f, rn)
+                )
+
+            # Get velocities
+            if self.motor_service_clients[robot_name]['velocities'].service_is_ready():
+                request = GetMotorVelocities.Request()
+                request.motor_ids = motor_ids
+                future = self.motor_service_clients[robot_name]['velocities'].call_async(request)
+                future.add_done_callback(
+                    lambda f, rn=robot_name: self._handle_velocities_response(f, rn)
+                )
+
+            # Get currents
+            if self.motor_service_clients[robot_name]['currents'].service_is_ready():
+                request = GetMotorCurrents.Request()
+                request.motor_ids = motor_ids
+                future = self.motor_service_clients[robot_name]['currents'].call_async(request)
+                future.add_done_callback(
+                    lambda f, rn=robot_name: self._handle_currents_response(f, rn)
+                )
+
+    def _handle_positions_response(self, future, robot_name):
+        """Handle positions service response"""
+        try:
+            response = future.result()
+            if response.success:
+                for i, pos in enumerate(response.positions[:8]):  # Only first 8 motors
+                    motor_id = i + 1
+                    self.motor_data[robot_name]['positions'][motor_id].append(float(pos))
+        except Exception as e:
+            self.get_logger().debug(f'Error getting positions for {robot_name}: {str(e)}')
+
+    def _handle_velocities_response(self, future, robot_name):
+        """Handle velocities service response"""
+        try:
+            response = future.result()
+            if response.success:
+                for i, vel in enumerate(response.velocities[:8]):  # Only first 8 motors
+                    motor_id = i + 1
+                    self.motor_data[robot_name]['velocities'][motor_id].append(float(vel))
+        except Exception as e:
+            self.get_logger().debug(f'Error getting velocities for {robot_name}: {str(e)}')
+
+    def _handle_currents_response(self, future, robot_name):
+        """Handle currents service response"""
+        try:
+            response = future.result()
+            if response.success:
+                for i, curr in enumerate(response.currents[:8]):  # Only first 8 motors
+                    motor_id = i + 1
+                    self.motor_data[robot_name]['currents'][motor_id].append(float(curr))
+        except Exception as e:
+            self.get_logger().debug(f'Error getting currents for {robot_name}: {str(e)}')
+
 
 class DashboardGUI:
     """IMGUI Dashboard GUI"""
@@ -196,7 +318,7 @@ class DashboardGUI:
         glfw.window_hint(glfw.OPENGL_FORWARD_COMPAT, gl.GL_TRUE)
 
         self.window = glfw.create_window(
-            1280, 720, "SMILEi Robot Dashboard", None, None
+            1600, 720, "SMILEi Robot Dashboard", None, None
         )
 
         if not self.window:
@@ -363,6 +485,73 @@ class DashboardGUI:
 
         imgui.end()
 
+    def render_motor_panel(self, robot_name, x_pos, y_pos):
+        """Render motor monitoring panel for a robot"""
+        panel_width = 640
+        panel_height = 700
+
+        imgui.set_next_window_position(x_pos, y_pos)
+        imgui.set_next_window_size(panel_width, panel_height)
+
+        title = f"Motores {robot_name.upper()}"
+        imgui.begin(title, flags=imgui.WINDOW_NO_RESIZE | imgui.WINDOW_NO_MOVE | imgui.WINDOW_NO_COLLAPSE)
+
+        # Display motors in a 2x4 grid
+        for motor_id in range(1, 9):
+            # Start a child region for each motor
+            child_width = (panel_width - 30) / 2
+            child_height = 160
+
+            imgui.push_id(f"{robot_name}_motor_{motor_id}")
+
+            if imgui.begin_child(
+                f"motor_{motor_id}",
+                child_width,
+                child_height,
+                border=True,
+                flags=imgui.WINDOW_NO_SCROLLBAR
+            ):
+                # Motor title
+                imgui.text(f"Motor {motor_id}")
+                imgui.separator()
+
+                # Get latest values
+                motor_data = self.node.motor_data[robot_name]
+
+                pos_data = list(motor_data['positions'][motor_id])
+                vel_data = list(motor_data['velocities'][motor_id])
+                curr_data = list(motor_data['currents'][motor_id])
+
+                # Display current values
+                pos_val = pos_data[-1] if pos_data else 0.0
+                vel_val = vel_data[-1] if vel_data else 0.0
+                curr_val = curr_data[-1] if curr_data else 0.0
+
+                imgui.text(f"Pos: {pos_val:6.3f} rad")
+                imgui.text(f"Vel: {vel_val:6.3f} rad/s")
+                imgui.text(f"Curr: {curr_val:5.2f} A")
+
+                # Mini plots for each metric
+                if len(pos_data) > 0:
+                    # Convert to numpy array for imgui
+                    pos_array = np.array(pos_data, dtype=np.float32)
+                    imgui.plot_lines(
+                        f"##pos_{motor_id}",
+                        pos_array,
+                        scale_min=float(np.min(pos_array)),
+                        scale_max=float(np.max(pos_array)),
+                        graph_size=(child_width - 20, 30)
+                    )
+
+            imgui.end_child()
+            imgui.pop_id()
+
+            # Layout: 2 motors per row
+            if motor_id % 2 == 1:
+                imgui.same_line()
+
+        imgui.end()
+
     def render(self):
         """Main render loop"""
         while not glfw.window_should_close(self.window) and self.node.gui_running:
@@ -376,6 +565,10 @@ class DashboardGUI:
             # Render dashboard panels
             self.render_robot_configuration_panel()
             self.render_state_control_panel()
+
+            # Render motor monitoring panels
+            self.render_motor_panel('seguidor', 310, 0)
+            self.render_motor_panel('operador', 960, 0)
 
             # Rendering
             gl.glClearColor(0.1, 0.1, 0.1, 1.0)
