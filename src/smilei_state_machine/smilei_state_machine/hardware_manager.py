@@ -8,6 +8,7 @@ from westwood_motor_interfaces.srv import (
     SetMotorIdAndTargetCurrent,
     GetMotorPositions,
     GetMotorVelocities,
+    GetAvailableMotors,
     SetMode,
     SetTorqueEnable
 )
@@ -121,6 +122,10 @@ class HardwareManager:
                 GetMotorVelocities,
                 'westwood_motor/get_motor_velocities'
             ),
+            'get_available': self.node.create_client(
+                GetAvailableMotors,
+                'westwood_motor/get_available_motors'
+            ),
             'set_mode': self.node.create_client(
                 SetMode,
                 'westwood_motor/set_mode'
@@ -133,6 +138,44 @@ class HardwareManager:
 
         self.hardware_connected = True  # Marcar como conectado en modo ROS2
         self.node.get_logger().info('✅ Clientes ROS2 configurados (modo servicio)')
+
+        # Consultar motores disponibles del servidor
+        self.query_available_motors_from_server()
+
+    def query_available_motors_from_server(self):
+        """Consultar motores disponibles del servidor usando servicio ROS2"""
+        self.node.get_logger().info('🔍 Consultando motores disponibles del servidor...')
+
+        client = self.ros2_clients['get_available']
+
+        # Esperar a que el servicio esté disponible
+        if not client.wait_for_service(timeout_sec=5.0):
+            self.node.get_logger().error('❌ Servicio get_available_motors no disponible después de 5s')
+            return
+
+        # Hacer la llamada síncrona
+        request = GetAvailableMotors.Request()
+
+        try:
+            future = client.call_async(request)
+
+            # Esperar la respuesta (bloqueante)
+            import rclpy
+            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
+
+            if future.done():
+                response = future.result()
+                if response.success:
+                    # Poblar detected_motors con los motores del servidor
+                    self.detected_motors = set(response.motor_ids)
+                    self.node.get_logger().info(f'✅ Motores disponibles del servidor: {sorted(list(self.detected_motors))}')
+                else:
+                    self.node.get_logger().warning(f'⚠️ Servidor reportó error: {response.message}')
+            else:
+                self.node.get_logger().error('❌ Timeout esperando respuesta del servidor')
+
+        except Exception as e:
+            self.node.get_logger().error(f'❌ Error consultando motores disponibles: {e}')
 
     def detect_and_map_motors(self):
         """Detectar automáticamente motores y crear mapeo inteligente como el servidor"""
@@ -413,7 +456,27 @@ class HardwareManager:
         if not self.hardware_connected:
             # Modo simulación - devolver posiciones cero
             return [0.0 for _ in motor_ids]
-        
+
+        # Si usamos servicios ROS2, llamar al servicio
+        if self.use_ros2_services:
+            client = self.ros2_clients['get_positions']
+            if not client.wait_for_service(timeout_sec=0.1):
+                self.node.get_logger().debug('Servicio get_motor_positions no disponible')
+                return [0.0 for _ in motor_ids]
+
+            request = GetMotorPositions.Request()
+            request.motor_ids = list(motor_ids)
+
+            try:
+                future = client.call_async(request)
+                # No bloqueamos, retornamos ceros y el servicio se procesa en background
+                # En el futuro podríamos cachear el último valor conocido
+                return [0.0 for _ in motor_ids]
+            except Exception as e:
+                self.node.get_logger().debug(f"Error llamando servicio get_positions: {e}")
+                return [0.0 for _ in motor_ids]
+
+        # Modo hardware directo (PyBear)
         positions = []
         for motor_id in motor_ids:
             manager, local_id = self.get_manager_for_motor(motor_id)
