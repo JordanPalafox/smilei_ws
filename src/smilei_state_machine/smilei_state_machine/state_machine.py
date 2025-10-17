@@ -309,12 +309,6 @@ def main():
     tree.setup()
 
     node.get_logger().info("Starting state machine...")
-
-    # Variable para trackear el último estado publicado y heartbeat
-    last_published_state = None
-    last_heartbeat_time = time.time()
-    HEARTBEAT_INTERVAL = 1.0  # Publicar al menos cada 1 segundo como heartbeat
-
     try:
         while rclpy.ok():
             # Procesar callbacks de ROS primero
@@ -324,25 +318,13 @@ def main():
             tree.tick()
             node.get_logger().debug(f"Estado actual: {current_state_command}, Completado: {last_completed_state}")
 
-            current_time = time.time()
-            state_changed = (current_state_command != last_published_state)
-            heartbeat_needed = (current_time - last_heartbeat_time) >= HEARTBEAT_INTERVAL
+            # Publicar estado actual para el dashboard
+            state_msg = String()
+            state_msg.data = current_state_command
+            current_state_pub.publish(state_msg)
 
-            # Publicar si: 1) El estado cambió, O 2) Han pasado >1 seg (heartbeat)
-            if state_changed or heartbeat_needed:
-                state_msg = String()
-                state_msg.data = current_state_command
-                current_state_pub.publish(state_msg)
-                last_published_state = current_state_command
-                last_heartbeat_time = current_time
-
-                if state_changed:
-                    node.get_logger().info(f"📢 Estado publicado (cambió): {current_state_command}")
-                else:
-                    node.get_logger().debug(f"💓 Heartbeat: {current_state_command}")
-
-            # Pausa de 10ms para ~100Hz (antes era 1ms = ~1000Hz)
-            time.sleep(0.01)
+            # Pequeña pausa para no saturar el CPU
+            time.sleep(0.001)
     except KeyboardInterrupt:
         pass
     finally:

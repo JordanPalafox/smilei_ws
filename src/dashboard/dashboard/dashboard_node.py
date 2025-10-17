@@ -9,8 +9,6 @@ from rclpy.node import Node
 from std_msgs.msg import String
 import threading
 import time
-import subprocess
-import signal
 
 # IMGUI imports
 try:
@@ -39,10 +37,6 @@ class DashboardNode(Node):
         self._current_state = "idle"
         self.last_completed_state = None
         self._last_state_update_time = None  # None = nunca ha recibido mensaje
-
-        # Launch process management
-        self.launch_process = None
-        self.launch_running = False
 
         # IP Configuration for remote teleoperation
         self.operador_ip = "192.168.0.100"
@@ -175,84 +169,6 @@ class DashboardNode(Node):
 
         self.get_logger().info(f'Updated IP config - Operador: {operador_ip}, Seguidor: {seguidor_ip}')
 
-    def start_state_machine_launch(self):
-        """Start the state machine launch file with the correct namespace"""
-        if self.launch_running:
-            self.get_logger().warning('Launch file is already running')
-            return False
-
-        try:
-            # Start the launch file in a subprocess with the selected robot's namespace
-            launch_cmd = [
-                'ros2', 'launch', 'smilei_state_machine', 'state_machine.launch.py',
-                f'namespace:={self.selected_robot}'
-            ]
-
-            # Usar start_new_session para crear un nuevo grupo de procesos
-            # Esto permite matar todos los procesos hijos junto con el padre
-            self.launch_process = subprocess.Popen(
-                launch_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                start_new_session=True  # Crear nuevo grupo de procesos
-            )
-            self.launch_running = True
-            self.get_logger().info(f'State machine launch started with namespace: {self.selected_robot}')
-            return True
-        except Exception as e:
-            self.get_logger().error(f'Failed to start launch file: {e}')
-            return False
-
-    def stop_state_machine_launch(self):
-        """Stop the state machine launch file"""
-        if not self.launch_running or not self.launch_process:
-            self.get_logger().warning('No launch file is running')
-            return False
-
-        try:
-            import os
-            # Como usamos start_new_session=True, el proceso tiene su propio grupo
-            # Necesitamos matar todo el grupo de procesos (pgid)
-            pgid = os.getpgid(self.launch_process.pid)
-
-            self.get_logger().info(f'Stopping process group {pgid}...')
-
-            # Enviar SIGTERM a todo el grupo de procesos
-            os.killpg(pgid, signal.SIGTERM)
-
-            try:
-                self.launch_process.wait(timeout=5)
-                self.get_logger().info('Process group terminated gracefully')
-            except subprocess.TimeoutExpired:
-                # Si no termina en 5 segundos, forzar con SIGKILL
-                self.get_logger().warning('Process group did not terminate, forcing with SIGKILL')
-                os.killpg(pgid, signal.SIGKILL)
-                self.launch_process.wait()
-                self.get_logger().info('Process group killed forcefully')
-
-            self.launch_process = None
-            self.launch_running = False
-
-            # Resetear el estado a idle cuando se detiene el launch
-            self.current_state = "idle"
-
-            self.get_logger().info('State machine launch stopped completely')
-            return True
-        except Exception as e:
-            self.get_logger().error(f'Failed to stop launch file: {e}')
-            return False
-
-    def check_launch_status(self):
-        """Check if the launch process is still running"""
-        if self.launch_process:
-            poll_result = self.launch_process.poll()
-            if poll_result is not None:
-                # Process has terminated
-                self.launch_running = False
-                self.launch_process = None
-                self.get_logger().warning('Launch process terminated unexpectedly')
-        return self.launch_running
-
 
 class DashboardGUI:
     """IMGUI Dashboard GUI"""
@@ -315,7 +231,7 @@ class DashboardGUI:
         imgui.style_colors_dark()
 
     def render_robot_configuration_panel(self):
-        """Render robot configuration panel with selection, launch control, and IP config"""
+        """Render robot configuration panel with selection and IP config"""
         # Set fixed window position and size
         imgui.set_next_window_position(0, 0)
         imgui.set_next_window_size(300, 220)
@@ -326,30 +242,16 @@ class DashboardGUI:
         imgui.text("Selected Robot:")
         imgui.spacing()
 
-        # Check if launch is running to disable robot selection
-        is_launch_running = self.node.check_launch_status()
+        # Radio buttons for robot selection (always enabled)
+        if imgui.radio_button("Operador", self.node.selected_robot == "operador"):
+            self.node.set_robot("operador")
 
-        # Disable radio buttons if launch is running
-        if is_launch_running:
-            imgui.push_style_var(imgui.STYLE_ALPHA, 0.5)
+        imgui.same_line()
 
-        # Radio buttons for robot selection
-        if not is_launch_running:
-            if imgui.radio_button("Operador", self.node.selected_robot == "operador"):
-                self.node.set_robot("operador")
+        if imgui.radio_button("Seguidor", self.node.selected_robot == "seguidor"):
+            self.node.set_robot("seguidor")
 
-            imgui.same_line()
-
-            if imgui.radio_button("Seguidor", self.node.selected_robot == "seguidor"):
-                self.node.set_robot("seguidor")
-        else:
-            # Show disabled buttons
-            imgui.radio_button("Operador", self.node.selected_robot == "operador")
-            imgui.same_line()
-            imgui.radio_button("Seguidor", self.node.selected_robot == "seguidor")
-
-        if is_launch_running:
-            imgui.pop_style_var(1)
+        imgui.separator()
 
         # IP Configuration section
         imgui.text("Teleoperation IPs:")
@@ -388,22 +290,6 @@ class DashboardGUI:
         imgui.set_next_window_size(300, 280)
 
         imgui.begin("Robot State Control", flags=imgui.WINDOW_NO_RESIZE | imgui.WINDOW_NO_MOVE | imgui.WINDOW_NO_COLLAPSE)
-
-        # Launch control buttons at the top
-        is_running = self.node.check_launch_status()
-
-        if is_running:
-            imgui.push_style_color(imgui.COLOR_BUTTON, 0.7, 0.2, 0.2, 1.0)
-            if imgui.button("Stop Launch", 280, 35):
-                self.node.stop_state_machine_launch()
-            imgui.pop_style_color(1)
-        else:
-            imgui.push_style_color(imgui.COLOR_BUTTON, 0.2, 0.7, 0.2, 1.0)
-            if imgui.button("Start Launch", 280, 35):
-                self.node.start_state_machine_launch()
-            imgui.pop_style_color(1)
-
-        imgui.separator()
 
         imgui.text(f"Robot: {self.node.selected_robot.upper()}")
         imgui.text(f"Current State: {self.node.current_state}")
