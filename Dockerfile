@@ -60,6 +60,9 @@ RUN chown -R ${DOCKER_USER} /usr/local
 # Add user to dialout group to access serial ports
 RUN usermod -aG dialout ${DOCKER_USER}
 
+# Add user to video group to access GPU
+RUN usermod -aG video ${DOCKER_USER}
+
 # Install PyBEAR
 # Clonar solo la versión específica y con una profundidad mínima para ahorrar tiempo y espacio
 RUN git clone --depth 1 --branch 0.1.3 https://github.com/Westwood-Robotics/PyBEAR.git /tmp/PyBEAR && \
@@ -70,7 +73,36 @@ RUN git clone --depth 1 --branch 0.1.3 https://github.com/Westwood-Robotics/PyBE
     rm -rf /tmp/PyBEAR && \
     # Limpiar el caché de apt para reducir el tamaño final de la imagen
     apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Download PyTorch wheel file
+RUN wget -O /home/${DOCKER_USER}/torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl https://developer.download.nvidia.cn/compute/redist/jp/v61/pytorch/torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl
     
+COPY install_cusparselt.sh /home/${DOCKER_USER}/
+
+RUN chmod +x /home/${DOCKER_USER}/install_cusparselt.sh && \
+    su - ${DOCKER_USER} -c "/home/${DOCKER_USER}/install_cusparselt.sh" && \
+    rm /home/${DOCKER_USER}/install_cusparselt.sh
+
+# Install PyTorch and cleanup the wheel
+RUN pip3 install --ignore-installed --index-url https://pypi.org/simple/ /home/${DOCKER_USER}/torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl && \
+    rm /home/${DOCKER_USER}/torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl
+
+# Download and install TorchAudio
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    ffmpeg libavformat-dev libavcodec-dev libavutil-dev libavdevice-dev libavfilter-dev && \
+    pip install cmake ninja --index-url https://pypi.org/simple/ && \
+    git clone https://github.com/pytorch/audio.git /tmp/audio && \
+    cd /tmp/audio && \
+    git checkout ea5de177 && \
+    USE_CUDA=1 pip install --verbose --no-use-pep517 . && \
+    cd / && \
+    rm -rf /tmp/audio && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 --branch main https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI.git /home/ros/RVC_Project
+
 # Copy setup script and give execution permissions
 COPY --chown=${DOCKER_USER}:${DOCKER_USER} ./setup.sh /home/${DOCKER_USER}/setup.sh
 RUN chmod +x /home/${DOCKER_USER}/setup.sh

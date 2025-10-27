@@ -3,6 +3,7 @@ version: '3.8'
 services:
   smilei_container:
     image: smilei_image
+    runtime: nvidia
     container_name: smilei_ros2_container  
     build: 
       context: .
