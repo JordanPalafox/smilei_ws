@@ -1,4 +1,3 @@
-version: '3.8'
 
 services:
   smilei_container:
@@ -22,7 +21,10 @@ services:
     network_mode: host
     volumes:
       # Mount the ROS2 workspace in the container
-      - ./src:/home/${DOCKER_USER}/smilei_ws/src
+      - ./src/smilei_debug_tools:/home/${DOCKER_USER}/smilei_ws/src/smilei_debug_tools
+      - ./src/smilei_state_machine:/home/${DOCKER_USER}/smilei_ws/src/smilei_state_machine
+      - ./src/westwood_motor_control_sdk_wrapper:/home/${DOCKER_USER}/smilei_ws/src/westwood_motor_control_sdk_wrapper
+      - ./src/westwood_motor_interfaces:/home/${DOCKER_USER}/smilei_ws/src/westwood_motor_interfaces
       # Mount the device directory to allow access to hardware devices
       - "/dev:/dev"      
       # Allow the container to access the X server

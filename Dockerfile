@@ -8,8 +8,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Set timezone to Coordinated Universal Time (UTC)
 ENV TZ=Etc/UTC
 
-# Update ROS2 GPG key
-RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+# Update ROS2 GPG key and sources list
+RUN rm -f /etc/apt/sources.list.d/ros2.list && \
+    apt-get update && \
+    apt-get install -y curl gnupg lsb-release && \
+    curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null && \
+    apt-get update
 
 # Install essential packages and colcon
 RUN apt-get update \
@@ -25,6 +30,7 @@ RUN apt-get update \
     pip \
     cmake \
     python3-colcon-common-extensions \
+    python3.10-venv \
     # Install ros2 packages
     ros-${ROS_DISTRO}-foxglove-bridge \
     ros-${ROS_DISTRO}-py-trees \
@@ -39,22 +45,21 @@ RUN apt-get update \
     ros-${ROS_DISTRO}-example-interfaces \
     && rm -rf /var/lib/apt/lists/*
 
-
 # Create a non-root user to avoid permission issues
 ARG DOCKER_USER=ros
 ARG USER_UID=1000
 ARG USER_GID=$USER_UID
 RUN groupadd --gid $USER_GID $DOCKER_USER \
-    && useradd -s /bin/bash --uid $USER_UID --gid $USER_GID -m $DOCKER_USER \
-    && mkdir /home/$DOCKER_USER/.config && chown $USER_UID:$USER_GID /home/$DOCKER_USER/.config
+&& useradd -s /bin/bash --uid $USER_UID --gid $USER_GID -m $DOCKER_USER \
+&& mkdir /home/$DOCKER_USER/.config && chown $USER_UID:$USER_GID /home/$DOCKER_USER/.config
 
 # Configure passwordless sudo for the non-root user
 RUN apt-get update \
-    && apt-get install -y sudo \
-    && echo $DOCKER_USER ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$DOCKER_USER\
-    && chmod 0440 /etc/sudoers.d/$DOCKER_USER \
-    && rm -rf /var/lib/apt/lists/*
-  
+&& apt-get install -y sudo \
+&& echo $DOCKER_USER ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$DOCKER_USER\
+&& chmod 0440 /etc/sudoers.d/$DOCKER_USER \
+&& rm -rf /var/lib/apt/lists/*
+
 # Ensure the non-root user has ownership of /usr/local (needed for some pip installs)
 RUN chown -R ${DOCKER_USER} /usr/local
 # Add user to dialout group to access serial ports
@@ -62,21 +67,28 @@ RUN usermod -aG dialout ${DOCKER_USER}
 
 # Add user to video group to access GPU
 RUN usermod -aG video ${DOCKER_USER}
-
+    
 # Install PyBEAR
 # Clonar solo la versión específica y con una profundidad mínima para ahorrar tiempo y espacio
 RUN git clone --depth 1 --branch 0.1.3 https://github.com/Westwood-Robotics/PyBEAR.git /tmp/PyBEAR && \
-    # Instalar el paquete directamente desde la carpeta clonada usando PyPI estándar
-    pip3 install --index-url https://pypi.org/simple/ /tmp/PyBEAR && \
-    # --- Limpieza Crucial ---
+# Instalar el paquete directamente desde la carpeta clonada usando PyPI estándar
+pip3 install --index-url https://pypi.org/simple/ /tmp/PyBEAR && \
+# --- Limpieza Crucial ---
     # Eliminar el código fuente que ya no es necesario
     rm -rf /tmp/PyBEAR && \
     # Limpiar el caché de apt para reducir el tamaño final de la imagen
     apt-get clean && rm -rf /var/lib/apt/lists/*
-
+        
+# Create the workspace directory and set up the Python virtual environment
+RUN mkdir -p /home/${DOCKER_USER}/smilei_ws/src && \
+    chown -R ${DOCKER_USER}:${DOCKER_USER} /home/${DOCKER_USER}/smilei_ws && \
+    cd /home/${DOCKER_USER}/smilei_ws/src/ && \
+    python3 -m venv --system-site-packages audio_env 
+        
 # Download PyTorch wheel file
 RUN wget -O /home/${DOCKER_USER}/torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl https://developer.download.nvidia.cn/compute/redist/jp/v61/pytorch/torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl
     
+# Copy and run the cuSparseLT installation script
 COPY install_cusparselt.sh /home/${DOCKER_USER}/
 
 RUN chmod +x /home/${DOCKER_USER}/install_cusparselt.sh && \
@@ -101,7 +113,13 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-RUN git clone --depth 1 --branch main https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI.git /home/ros/RVC_Project
+# Clone Retrieval-based Voice Conversion WebUI repository
+RUN git clone --depth 1 --branch main https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI.git /home/${DOCKER_USER}/smilei_ws/src/RVC_Project
+
+# Copy model files
+COPY ./robot-voice-Arturo.pth /home/${DOCKER_USER}/smilei_ws/src/RVC_Project/robot-voice-Arturo.pth
+COPY ./trained_IVF601_Flat_nprobe_1_robot-voice-Arturo_v2.index /home/${DOCKER_USER}/smilei_ws/src/RVC_Project/trained_IVF601_Flat_nprobe_1_robot-voice-Arturo_v2.index
+
 
 # Copy setup script and give execution permissions
 COPY --chown=${DOCKER_USER}:${DOCKER_USER} ./setup.sh /home/${DOCKER_USER}/setup.sh
@@ -115,9 +133,7 @@ RUN echo 'source /usr/share/colcon_argcomplete/hook/colcon-argcomplete.bash' >> 
     echo 'set -g default-terminal "screen-256color"' >> /home/${DOCKER_USER}/.tmux.conf && \
     echo 'set -g mouse on' >> /home/${DOCKER_USER}/.tmux.conf
 
-# Crear el directorio del workspace y asegurar que el propietario sea el usuario no-root
-RUN mkdir -p /home/${DOCKER_USER}/smilei_ws/src && \
-    chown -R ${DOCKER_USER}:${DOCKER_USER} /home/${DOCKER_USER}/smilei_ws
+
 
 # Switch to non-root user
 USER ${DOCKER_USER}
