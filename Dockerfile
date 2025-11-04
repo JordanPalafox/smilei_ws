@@ -31,6 +31,10 @@ RUN apt-get update \
     cmake \
     python3-colcon-common-extensions \
     python3.10-venv \
+    # Install gstreamer packages 
+    gstreamer1.0-tools \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
     # Install ros2 packages
     ros-${ROS_DISTRO}-foxglove-bridge \
     ros-${ROS_DISTRO}-py-trees \
@@ -81,10 +85,10 @@ pip3 install --index-url https://pypi.org/simple/ /tmp/PyBEAR && \
         
 # Create the workspace directory and set up the Python virtual environment
 RUN mkdir -p /home/${DOCKER_USER}/smilei_ws/src && \
-    chown -R ${DOCKER_USER}:${DOCKER_USER} /home/${DOCKER_USER}/smilei_ws && \
     cd /home/${DOCKER_USER}/smilei_ws/src/ && \
-    python3 -m venv --system-site-packages audio_env 
-        
+    python3 -m venv audio_env && \
+    chown -R ${DOCKER_USER}:${DOCKER_USER} /home/${DOCKER_USER}/smilei_ws
+
 # Download PyTorch wheel file
 RUN wget -O /home/${DOCKER_USER}/torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl https://developer.download.nvidia.cn/compute/redist/jp/v61/pytorch/torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl
     
@@ -96,21 +100,38 @@ RUN chmod +x /home/${DOCKER_USER}/install_cusparselt.sh && \
     rm /home/${DOCKER_USER}/install_cusparselt.sh
 
 # Install PyTorch and cleanup the wheel
-RUN pip3 install --ignore-installed --index-url https://pypi.org/simple/ /home/${DOCKER_USER}/torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl && \
+RUN /home/${DOCKER_USER}/smilei_ws/src/audio_env/bin/pip install --ignore-installed --index-url https://pypi.org/simple/ /home/${DOCKER_USER}/torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl && \
     rm /home/${DOCKER_USER}/torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl
 
 # Download and install TorchAudio
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    ninja-build \
+    libportaudio2 \
+    portaudio19-dev \
     ffmpeg libavformat-dev libavcodec-dev libavutil-dev libavdevice-dev libavfilter-dev && \
-    pip install cmake ninja --index-url https://pypi.org/simple/ && \
+    /home/${DOCKER_USER}/smilei_ws/src/audio_env/bin/pip install --index-url https://pypi.org/simple/ setuptools && \
     git clone https://github.com/pytorch/audio.git /tmp/audio && \
     cd /tmp/audio && \
     git checkout ea5de177 && \
-    USE_CUDA=1 pip install --verbose --no-use-pep517 . && \
+    USE_CUDA=1 /home/${DOCKER_USER}/smilei_ws/src/audio_env/bin/pip install --verbose --no-use-pep517 . && \
     cd / && \
     rm -rf /tmp/audio && \
     apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install depthai and other packages in system Python (where ROS 2 is)
+RUN pip3 install \
+    --index-url https://pypi.org/simple/ \
+    'depthai>=2.25,<3.0'
+
+# Install system packages for ROS 2 nodes
+RUN apt-get update && \
+    apt-get install -y \
+    python3-cv-bridge \
+    && apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
 # Clone Retrieval-based Voice Conversion WebUI repository
@@ -133,7 +154,15 @@ RUN echo 'source /usr/share/colcon_argcomplete/hook/colcon-argcomplete.bash' >> 
     echo 'set -g default-terminal "screen-256color"' >> /home/${DOCKER_USER}/.tmux.conf && \
     echo 'set -g mouse on' >> /home/${DOCKER_USER}/.tmux.conf
 
+# Copy oak_publisher script
+COPY ./oak_publisher.py /home/${DOCKER_USER}/
 
+# Copy requirements.txt for venv
+COPY requirements.txt /home/${DOCKER_USER}/smilei_ws/
+
+# Install packages from requirements.txt in the venv
+RUN /home/${DOCKER_USER}/smilei_ws/src/audio_env/bin/pip install --index-url https://pypi.org/simple/ --upgrade pip && \
+    /home/${DOCKER_USER}/smilei_ws/src/audio_env/bin/pip install --index-url https://pypi.org/simple/ -r /home/${DOCKER_USER}/smilei_ws/requirements.txt
 
 # Switch to non-root user
 USER ${DOCKER_USER}

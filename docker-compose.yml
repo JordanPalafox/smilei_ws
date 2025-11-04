@@ -33,4 +33,5 @@ services:
     # Rule that grants the container permissions to read (r), write (w), and create (m)
     # character device nodes (c) for devices with major group 188.
     device_cgroup_rules:
-      - 'c 188:* rwm'
+      - 'c 188:* rwm' 
+      - 'c 189:* rwm' 
