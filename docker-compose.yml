@@ -26,12 +26,16 @@ services:
       - ./src/westwood_motor_control_sdk_wrapper:/home/${DOCKER_USER}/smilei_ws/src/westwood_motor_control_sdk_wrapper
       - ./src/westwood_motor_interfaces:/home/${DOCKER_USER}/smilei_ws/src/westwood_motor_interfaces
       # Mount the device directory to allow access to hardware devices
-      - "/dev:/dev"      
+      - "/dev:/dev"
       # Allow the container to access the X server
       - /tmp/.X11-unix:/tmp/.X11-unix
+
+    devices:
+      # Pass through audio device to container
+      - /dev/snd:/dev/snd
 
     # Rule that grants the container permissions to read (r), write (w), and create (m)
     # character device nodes (c) for devices with major group 188.
     device_cgroup_rules:
-      - 'c 188:* rwm' 
+      - 'c 188:* rwm'
       - 'c 189:* rwm' 
