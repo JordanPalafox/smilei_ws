@@ -13,11 +13,13 @@ services:
         - USER_UID=${USER_UID}
         - USER_GID=${USER_GID}
     # stdin_opne and tty are necessary for an interactive terminal
-    stdin_open: true 
+    stdin_open: true
     tty: true
     # Allow the container to use the host's X server
     environment:
       - DISPLAY=${DISPLAY}
+      - PULSE_SERVER=unix:${XDG_RUNTIME_DIR}/pulse/native
+      - XDG_RUNTIME_DIR=/run/user/${USER_UID}
     network_mode: host
     volumes:
       # Mount the ROS2 workspace in the container
@@ -29,6 +31,12 @@ services:
       - "/dev:/dev"
       # Allow the container to access the X server
       - /tmp/.X11-unix:/tmp/.X11-unix
+      # Mount PulseAudio socket for audio access
+      - /run/user/${USER_UID}/pulse:/run/user/${USER_UID}/pulse
+      # Mount DBUS for audio device discovery
+      - /run/dbus:/run/dbus
+      # Mount user runtime directory for audio
+      - /run/user/${USER_UID}:/run/user/${USER_UID}
 
     devices:
       # Pass through audio device to container

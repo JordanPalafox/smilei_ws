@@ -138,6 +138,9 @@ RUN apt-get update && \
 RUN git clone --depth 1 --branch main https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI.git /home/${DOCKER_USER}/smilei_ws/src/RVC_Project && \
 chown -R ${DOCKER_USER}:${DOCKER_USER} /home/${DOCKER_USER}/smilei_ws/src/RVC_Project
 
+# Download RVC models
+RUN cd /home/${DOCKER_USER}/smilei_ws/src/RVC_Project && python3 tools/download_models.py
+
 # Copy model files
 COPY --chown=${DOCKER_USER}:${DOCKER_USER} ./robot-voice-Arturo.pth /home/${DOCKER_USER}/smilei_ws/src/RVC_Project/robot-voice-Arturo.pth
 COPY --chown=${DOCKER_USER}:${DOCKER_USER} ./trained_IVF601_Flat_nprobe_1_robot-voice-Arturo_v2.index /home/${DOCKER_USER}/smilei_ws/src/RVC_Project/trained_IVF601_Flat_nprobe_1_robot-voice-Arturo_v2.index
@@ -163,6 +166,9 @@ COPY requirements.txt /home/${DOCKER_USER}/smilei_ws/
 # Install packages from requirements.txt in the venv
 RUN /home/${DOCKER_USER}/smilei_ws/src/audio_env/bin/pip install --index-url https://pypi.org/simple/ -r /home/${DOCKER_USER}/smilei_ws/requirements.txt && \
     chown -R ${DOCKER_USER}:${DOCKER_USER} /home/${DOCKER_USER}/smilei_ws/src/audio_env
+
+# Add user to audio group to access audio devices
+RUN usermod -aG audio ${DOCKER_USER}
 
 # Switch to non-root user
 USER ${DOCKER_USER}
