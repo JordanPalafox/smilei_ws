@@ -1,0 +1,49 @@
+
+services:
+  smilei_container:
+    image: smilei_image
+    runtime: nvidia
+    container_name: smilei_ros2_container  
+    build: 
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - ROS_DISTRO=${ROS_DISTRO}
+        - USERNAME=${DOCKER_USER}
+        - USER_UID=${USER_UID}
+        - USER_GID=${USER_GID}
+    # stdin_opne and tty are necessary for an interactive terminal
+    stdin_open: true
+    tty: true
+    # Allow the container to use the host's X server
+    environment:
+      - DISPLAY=${DISPLAY}
+      - PULSE_SERVER=unix:${XDG_RUNTIME_DIR}/pulse/native
+      - XDG_RUNTIME_DIR=/run/user/${USER_UID}
+    network_mode: host
+    volumes:
+      # Mount the ROS2 workspace in the container
+      - ./src/smilei_debug_tools:/home/${DOCKER_USER}/smilei_ws/src/smilei_debug_tools
+      - ./src/smilei_state_machine:/home/${DOCKER_USER}/smilei_ws/src/smilei_state_machine
+      - ./src/westwood_motor_control_sdk_wrapper:/home/${DOCKER_USER}/smilei_ws/src/westwood_motor_control_sdk_wrapper
+      - ./src/westwood_motor_interfaces:/home/${DOCKER_USER}/smilei_ws/src/westwood_motor_interfaces
+      # Mount the device directory to allow access to hardware devices
+      - "/dev:/dev"
+      # Allow the container to access the X server
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      # Mount PulseAudio socket for audio access
+      - /run/user/${USER_UID}/pulse:/run/user/${USER_UID}/pulse
+      # Mount DBUS for audio device discovery
+      - /run/dbus:/run/dbus
+      # Mount user runtime directory for audio
+      - /run/user/${USER_UID}:/run/user/${USER_UID}
+
+    devices:
+      # Pass through audio device to container
+      - /dev/snd:/dev/snd
+
+    # Rule that grants the container permissions to read (r), write (w), and create (m)
+    # character device nodes (c) for devices with major group 188.
+    device_cgroup_rules:
+      - 'c 188:* rwm'
+      - 'c 189:* rwm' 
