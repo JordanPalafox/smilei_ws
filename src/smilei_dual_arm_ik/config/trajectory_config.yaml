@@ -1,0 +1,95 @@
+# Trajectory Configuration
+# Define target waypoints for the end effector
+
+# List of target positions [x, y, z] in meters (base_link frame)
+# Note: Robot workspace is approximately x=1.3-1.6, y=-0.3-0.3, z=0.4-0.8
+target_waypoints:
+
+  - x: 0.170
+    y: 0.010
+    z: 0.350
+
+  # Waypoint 1: Starting position (centered)
+  # - x: 0.230
+  #   y: 0.130
+  #   z: 0.210
+
+  # Waypoint 2: Move right
+  - x: 0.290
+    y: 0.030
+    z: 0.360
+
+  # Waypoint 3: Move down and left
+  - x: 0.310
+    y: 0.060
+    z: 0.250
+
+  # Waypoint 4: Move up
+  - x: 0.220
+    y: 0.060
+    z: 0.120
+
+  - x: 0.170
+    y: 0.030
+    z: 0.080
+
+  # Waypoint 5: Return to start
+  # - x: 0.230
+  #   y: 0.130
+  #   z: 0.210
+
+# Trajectory planning parameters
+trajectory_params:
+  # Interpolation method: 'linear' or 'cubic'
+  interpolation_method: 'cubic'
+
+  # Number of intermediate steps between each pair of waypoints
+  # Higher values = smoother motion but more computation
+  steps_per_segment: 50
+
+  # Execution rate in Hz (how many trajectory points to execute per second)
+  execution_rate: 10.0
+
+  # Maximum joint velocity (rad/s)
+  max_velocity: 1.0
+
+  # Maximum joint acceleration (rad/s²)
+  max_acceleration: 2.0
+
+# IK solver parameters
+ik_params:
+  # Optimization method: 'SLSQP', 'L-BFGS-B', or 'differential_evolution'
+  method: 'SLSQP'
+
+  # Number of attempts with different initial guesses
+  # Increased from 3 to 10 for better coverage of solution space
+  num_attempts: 10
+
+  # Use global optimization (differential evolution) if local optimization fails
+  use_global_if_needed: true
+
+  # Position error tolerance (meters)
+  tolerance: 0.01
+
+# Visualization parameters
+visualization:
+  # Show trajectory path in RViz
+  show_path: true
+
+  # Show waypoint markers
+  show_waypoints: true
+
+  # Show intermediate points
+  show_intermediate: true
+
+  # Path color [r, g, b, a]
+  path_color: [0.0, 1.0, 0.0, 0.8]
+
+  # Waypoint color [r, g, b, a] (intermediate waypoints)
+  waypoint_color: [1.0, 0.0, 0.0, 1.0]
+
+  # Final waypoint color [r, g, b, a] (destination point)
+  final_waypoint_color: [1.0, 0.0, 1.0, 1.0]  # Magenta/Pink
+
+  # Intermediate point color [r, g, b, a]
+  intermediate_color: [0.0, 0.5, 1.0, 0.6]

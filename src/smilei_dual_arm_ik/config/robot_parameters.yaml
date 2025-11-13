@@ -1,0 +1,39 @@
+# Robot geometric parameters
+# These parameters define the physical dimensions of the robot arm
+# All measurements are in meters, all angles in radians
+
+robot_geometry:
+  # Neck dimensions
+  neck_height: 0.24
+
+  # Arm dimensions
+  base_height: 0.24
+  link0_length: 0.081
+  link0_width: 0.0
+  link1_length: 0.08
+  link1_width: -0.062
+  link2_length: 0.025
+  link2_width: 0.062
+  link3_length: -0.054
+  link4_length: -0.09
+  ee_offset: 0.0
+
+  # Joint limits (radians)
+  joint0_lower: -0.78539816339  # -π/4
+  joint0_upper: 1.57079632679   # π/2
+  joint1_lower: -0.78539816339  # -π/4
+  joint1_upper: 1.57079632679   # π/2
+  joint2_lower: -0.78539816339  # -π/4
+  joint2_upper: 1.57079632679   # π/2
+  joint3_lower: 0               # 0
+  joint3_upper: 1.57079632679   # π/2
+
+  # Joint dynamics
+  joint0_effort: 100.0
+  joint0_velocity: 1.0
+  joint1_effort: 100.0
+  joint1_velocity: 1.0
+  joint2_effort: 80.0
+  joint2_velocity: 1.0
+  joint3_effort: 50.0
+  joint3_velocity: 2.0
