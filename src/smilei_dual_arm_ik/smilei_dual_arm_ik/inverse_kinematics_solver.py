@@ -122,25 +122,28 @@ class InverseKinematicsSolver:
         T = T @ T_fixed_1 @ T_joint_1
 
         # 4. link_2 → link_3 (joint_2 with rotation)
+        # URDF: origin xyz="0 ${link2_length} ${link2_width}" rpy="${-PI_2} ${-PI_2} 0"
         T_fixed_2 = self.create_transform(
             [0, self.link2_length, self.link2_width],
-            [self.PI/2, 0, 0]
+            [-self.PI/2, -self.PI/2, 0]
         )
         T_joint_2 = self.create_rotation_z(joint_angles[2])
         T = T @ T_fixed_2 @ T_joint_2
 
         # 5. link_3 → link_4 (joint_3 with rotation)
+        # URDF: origin xyz="0 0 ${link3_length}" rpy="${PI_2} 0 ${PI_2}"
         T_fixed_3 = self.create_transform(
             [0, 0, self.link3_length],
-            [self.PI/2, 0, 0]
+            [self.PI/2, 0, self.PI/2]
         )
         T_joint_3 = self.create_rotation_z(joint_angles[3])
         T = T @ T_fixed_3 @ T_joint_3
 
         # 6. link_4 → end_effector (fixed)
+        # URDF: origin xyz="0 ${link4_length + ee_offset} 0" rpy="${PI_2} 0 ${PI_2}"
         T_ee = self.create_transform(
             [0, self.link4_length + self.ee_offset, 0],
-            [-self.PI/2, 0, -self.PI/2]
+            [self.PI/2, 0, self.PI/2]
         )
         T = T @ T_ee
 

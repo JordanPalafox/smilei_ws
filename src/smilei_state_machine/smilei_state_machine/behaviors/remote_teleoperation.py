@@ -137,10 +137,10 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             # Cargar límites de articulaciones
             self.node.get_logger().info("Cargando límites de articulaciones desde parámetros...")
             for joint_name, default_limits in {
-                'q_l1': [-1.5708, 1.5708], 'q_l2': [-1.5708, 0.7854],
-                'q_l3': [-1.5708, 2.3562], 'q_l4': [-1.5708, 1.5708],
-                'q_r1': [-1.5708, 1.5708], 'q_r2': [-0.7854, 1.5708],
-                'q_r3': [-2.3562, 1.5708], 'q_r4': [-1.5708, 1.5708]
+                'q_l1': [-1.5708, 0.7853], 'q_l2': [-1.5708, 0.7854],
+                'q_l3': [-0.7853, 2.3562], 'q_l4': [0.0000, 1.5708],
+                'q_r1': [-0.7853, 1.5708], 'q_r2': [-0.7853, 1.5708],
+                'q_r3': [-2.3562, 0.7853], 'q_r4': [-1.5708, 0.0000]
             }.items():
                 param_name = f'joint_limits.{joint_name}'
                 self.node.declare_parameter(param_name, default_limits)

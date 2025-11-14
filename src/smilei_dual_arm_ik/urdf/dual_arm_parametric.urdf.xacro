@@ -1,0 +1,413 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="smilei_dual_arm">
+
+  <!-- Load parameters from YAML file -->
+  <!-- The actual values will be passed from the launch file as arguments -->
+
+  <!-- Define constants -->
+  <xacro:property name="PI" value="3.14159265359"/>
+  <xacro:property name="PI_2" value="${PI/2}"/>
+  <xacro:property name="PI_4" value="${PI/4}"/>
+
+  <!-- Declare arguments with default values -->
+  <!-- Neck dimensions -->
+  <xacro:arg name="neck_height" default="0.34"/>
+  <xacro:property name="neck_height" value="$(arg neck_height)"/>
+
+  <!-- Arm dimensions -->
+  <xacro:arg name="base_height" default="0.34"/>
+  <xacro:property name="base_height" value="$(arg base_height)"/>
+
+  <xacro:arg name="link0_length" default="0.10"/>
+  <xacro:property name="link0_length" value="$(arg link0_length)"/>
+
+  <xacro:arg name="link0_width" default="0.0"/>
+  <xacro:property name="link0_width" value="$(arg link0_width)"/>
+
+  <xacro:arg name="link1_length" default="0.15"/>
+  <xacro:property name="link1_length" value="$(arg link1_length)"/>
+
+  <xacro:arg name="link1_width" default="-0.30"/>
+  <xacro:property name="link1_width" value="$(arg link1_width)"/>
+
+  <xacro:arg name="link2_length" default="0.25"/>
+  <xacro:property name="link2_length" value="$(arg link2_length)"/>
+
+  <xacro:arg name="link2_width" default="0.20"/>
+  <xacro:property name="link2_width" value="$(arg link2_width)"/>
+
+  <xacro:arg name="link3_length" default="-0.2"/>
+  <xacro:property name="link3_length" value="$(arg link3_length)"/>
+
+  <xacro:arg name="link4_length" default="-0.08"/>
+  <xacro:property name="link4_length" value="$(arg link4_length)"/>
+
+  <xacro:arg name="ee_offset" default="0.0"/>
+  <xacro:property name="ee_offset" value="$(arg ee_offset)"/>
+
+  <!-- Joint limits - Right Arm -->
+  <xacro:arg name="right_joint0_lower" default="-0.78539816339"/>
+  <xacro:property name="right_joint0_lower" value="$(arg right_joint0_lower)"/>
+
+  <xacro:arg name="right_joint0_upper" default="1.57079632679"/>
+  <xacro:property name="right_joint0_upper" value="$(arg right_joint0_upper)"/>
+
+  <xacro:arg name="right_joint1_lower" default="-0.78539816339"/>
+  <xacro:property name="right_joint1_lower" value="$(arg right_joint1_lower)"/>
+
+  <xacro:arg name="right_joint1_upper" default="1.57079632679"/>
+  <xacro:property name="right_joint1_upper" value="$(arg right_joint1_upper)"/>
+
+  <xacro:arg name="right_joint2_lower" default="-2.35619449019"/>
+  <xacro:property name="right_joint2_lower" value="$(arg right_joint2_lower)"/>
+
+  <xacro:arg name="right_joint2_upper" default="0.78539816339"/>
+  <xacro:property name="right_joint2_upper" value="$(arg right_joint2_upper)"/>
+
+  <xacro:arg name="right_joint3_lower" default="-1.57079632679"/>
+  <xacro:property name="right_joint3_lower" value="$(arg right_joint3_lower)"/>
+
+  <xacro:arg name="right_joint3_upper" default="0"/>
+  <xacro:property name="right_joint3_upper" value="$(arg right_joint3_upper)"/>
+
+  <!-- Joint limits - Left Arm -->
+  <xacro:arg name="left_joint0_lower" default="-0.78539816339"/>
+  <xacro:property name="left_joint0_lower" value="$(arg left_joint0_lower)"/>
+
+  <xacro:arg name="left_joint0_upper" default="1.57079632679"/>
+  <xacro:property name="left_joint0_upper" value="$(arg left_joint0_upper)"/>
+
+  <xacro:arg name="left_joint1_lower" default="-0.78539816339"/>
+  <xacro:property name="left_joint1_lower" value="$(arg left_joint1_lower)"/>
+
+  <xacro:arg name="left_joint1_upper" default="1.57079632679"/>
+  <xacro:property name="left_joint1_upper" value="$(arg left_joint1_upper)"/>
+
+  <xacro:arg name="left_joint2_lower" default="-2.35619449019"/>
+  <xacro:property name="left_joint2_lower" value="$(arg left_joint2_lower)"/>
+
+  <xacro:arg name="left_joint2_upper" default="0.78539816339"/>
+  <xacro:property name="left_joint2_upper" value="$(arg left_joint2_upper)"/>
+
+  <xacro:arg name="left_joint3_lower" default="-1.57079632679"/>
+  <xacro:property name="left_joint3_lower" value="$(arg left_joint3_lower)"/>
+
+  <xacro:arg name="left_joint3_upper" default="0"/>
+  <xacro:property name="left_joint3_upper" value="$(arg left_joint3_upper)"/>
+
+  <!-- Joint dynamics -->
+  <xacro:arg name="joint0_effort" default="100.0"/>
+  <xacro:property name="joint0_effort" value="$(arg joint0_effort)"/>
+
+  <xacro:arg name="joint0_velocity" default="1.0"/>
+  <xacro:property name="joint0_velocity" value="$(arg joint0_velocity)"/>
+
+  <xacro:arg name="joint1_effort" default="100.0"/>
+  <xacro:property name="joint1_effort" value="$(arg joint1_effort)"/>
+
+  <xacro:arg name="joint1_velocity" default="1.0"/>
+  <xacro:property name="joint1_velocity" value="$(arg joint1_velocity)"/>
+
+  <xacro:arg name="joint2_effort" default="80.0"/>
+  <xacro:property name="joint2_effort" value="$(arg joint2_effort)"/>
+
+  <xacro:arg name="joint2_velocity" default="1.0"/>
+  <xacro:property name="joint2_velocity" value="$(arg joint2_velocity)"/>
+
+  <xacro:arg name="joint3_effort" default="50.0"/>
+  <xacro:property name="joint3_effort" value="$(arg joint3_effort)"/>
+
+  <xacro:arg name="joint3_velocity" default="2.0"/>
+  <xacro:property name="joint3_velocity" value="$(arg joint3_velocity)"/>
+
+
+  <!-- Base Link -->
+  <link name="base_link" />
+
+  <!-- Neck Base Joint - Fixed -->
+  <joint name="neck_base_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="neck_base"/>
+    <origin xyz="0 0 ${neck_height}" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Base Link (Neck Base) - Fixed reference frame -->
+  <link name="neck_base">
+    <visual>
+      <geometry>
+        <box size="0.1 0.1 ${base_height}"/>
+      </geometry>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <material name="gray">
+        <color rgba="0.5 0.5 0.5 1.0"/>
+      </material>
+    </visual>
+    <inertial>
+      <mass value="0.5"/>
+      <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.001"/>
+    </inertial>
+  </link>
+
+  <!-- ============================================ -->
+  <!-- RIGHT ARM (positive X direction) -->
+  <!-- ============================================ -->
+
+  <!-- Joint 0 Right - Shoulder Pan -->
+  <joint name="right_joint_0" type="revolute">
+    <parent link="neck_base"/>
+    <child link="right_link_1"/>
+    <origin xyz="${link0_length} 0 0" rpy="${PI_2} 0 ${PI_2}"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="${right_joint0_lower}" upper="${right_joint0_upper}" effort="${joint0_effort}" velocity="${joint0_velocity}"/>
+  </joint>
+
+  <link name="right_link_1">
+    <visual>
+      <geometry>
+        <cylinder radius="0.04" length="${link1_length}"/>
+      </geometry>
+      <origin xyz="${link1_width/2} 0 ${link1_length/2}" rpy="0 0 0"/>
+      <material name="blue">
+        <color rgba="0.0 0.0 0.8 1.0"/>
+      </material>
+    </visual>
+    <inertial>
+      <mass value="0.3"/>
+      <origin xyz="${link1_width/2} 0 ${link1_length/2}" rpy="0 0 0"/>
+      <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.0005"/>
+    </inertial>
+  </link>
+
+  <!-- Joint 1 Right - Shoulder Lift -->
+  <joint name="right_joint_1" type="revolute">
+    <parent link="right_link_1"/>
+    <child link="right_link_2"/>
+    <origin xyz="${link1_width} 0 ${link1_length}" rpy="${PI_2} 0 ${PI_2}"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="${right_joint1_lower}" upper="${right_joint1_upper}" effort="${joint1_effort}" velocity="${joint1_velocity}"/>
+  </joint>
+
+  <link name="right_link_2">
+    <visual>
+      <geometry>
+        <cylinder radius="0.035" length="${link2_length}"/>
+      </geometry>
+      <origin xyz="0 ${link2_length/2} ${link2_width/2}" rpy="0 0 0"/>
+      <material name="green">
+        <color rgba="0.0 0.8 0.0 1.0"/>
+      </material>
+    </visual>
+    <inertial>
+      <mass value="0.25"/>
+      <origin xyz="0 ${link2_length/2} ${link2_width/2}" rpy="0 0 0"/>
+      <inertia ixx="0.0008" ixy="0.0" ixz="0.0" iyy="0.0008" iyz="0.0" izz="0.0004"/>
+    </inertial>
+  </link>
+
+  <!-- Joint 2 Right - Elbow -->
+  <joint name="right_joint_2" type="revolute">
+    <parent link="right_link_2"/>
+    <child link="right_link_3"/>
+    <origin xyz="0 ${link2_length} ${link2_width}" rpy="${-PI_2} ${-PI_2} 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="${right_joint2_lower}" upper="${right_joint2_upper}" effort="${joint2_effort}" velocity="${joint2_velocity}"/>
+  </joint>
+
+  <link name="right_link_3">
+    <visual>
+      <geometry>
+        <cylinder radius="0.03" length="${-link3_length}"/>
+      </geometry>
+      <origin xyz="0 0 ${link3_length/2}" rpy="0 0 0"/>
+      <material name="red">
+        <color rgba="0.8 0.0 0.0 1.0"/>
+      </material>
+    </visual>
+    <inertial>
+      <mass value="0.2"/>
+      <origin xyz="0 0 ${link3_length/2}" rpy="0 0 0"/>
+      <inertia ixx="0.0005" ixy="0.0" ixz="0.0" iyy="0.0005" iyz="0.0" izz="0.0003"/>
+    </inertial>
+  </link>
+
+  <!-- Joint 3 Right - Wrist -->
+  <joint name="right_joint_3" type="revolute">
+    <parent link="right_link_3"/>
+    <child link="right_link_4"/>
+    <origin xyz="0 0 ${link3_length}" rpy="${PI_2} 0 ${PI_2}"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="${right_joint3_lower}" upper="${right_joint3_upper}" effort="${joint3_effort}" velocity="${joint3_velocity}"/>
+  </joint>
+
+  <link name="right_link_4">
+    <visual>
+      <geometry>
+        <cylinder radius="0.025" length="${-link4_length}"/>
+      </geometry>
+      <origin xyz="0 ${link4_length/2} 0" rpy="0 0 0"/>
+      <material name="yellow">
+        <color rgba="0.8 0.8 0.0 1.0"/>
+      </material>
+    </visual>
+    <inertial>
+      <mass value="0.15"/>
+      <origin xyz="0 ${link4_length/2} 0" rpy="0 0 0"/>
+      <inertia ixx="0.0003" ixy="0.0" ixz="0.0" iyy="0.0003" iyz="0.0" izz="0.0002"/>
+    </inertial>
+  </link>
+
+  <!-- End Effector Right -->
+  <joint name="right_ee_joint" type="fixed">
+    <parent link="right_link_4"/>
+    <child link="right_end_effector"/>
+    <origin xyz="0 ${link4_length + ee_offset} 0" rpy="${PI_2} 0 ${PI_2}"/>
+  </joint>
+
+  <link name="right_end_effector">
+    <visual>
+      <geometry>
+        <sphere radius="0.02"/>
+      </geometry>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <material name="orange">
+        <color rgba="1.0 0.5 0.0 1.0"/>
+      </material>
+    </visual>
+    <inertial>
+      <mass value="0.05"/>
+      <inertia ixx="0.0001" ixy="0.0" ixz="0.0" iyy="0.0001" iyz="0.0" izz="0.0001"/>
+    </inertial>
+  </link>
+
+  <!-- ============================================ -->
+  <!-- LEFT ARM (negative X direction - mirrored) -->
+  <!-- ============================================ -->
+
+  <!-- Joint 0 Left - Shoulder Pan (mirrored) -->
+  <joint name="left_joint_0" type="revolute">
+    <parent link="neck_base"/>
+    <child link="left_link_1"/>
+    <origin xyz="${-link0_length} 0 0" rpy="${PI_2} ${-PI_2} ${-PI_2}"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="${left_joint0_lower}" upper="${left_joint0_upper}" effort="${joint0_effort}" velocity="${joint0_velocity}"/>
+  </joint>
+
+  <link name="left_link_1">
+    <visual>
+      <geometry>
+        <cylinder radius="0.04" length="${link1_length}"/>
+      </geometry>
+      <origin xyz="${link1_width/2} 0 ${link1_length/2}" rpy="0 0 0"/>
+      <material name="blue">
+        <color rgba="0.0 0.0 0.8 1.0"/>
+      </material>
+    </visual>
+    <inertial>
+      <mass value="0.3"/>
+      <origin xyz="${link1_width/2} 0 ${link1_length/2}" rpy="0 0 0"/>
+      <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.0005"/>
+    </inertial>
+  </link>
+
+  <!-- Joint 1 Left - Shoulder Lift -->
+  <joint name="left_joint_1" type="revolute">
+    <parent link="left_link_1"/>
+    <child link="left_link_2"/>
+    <origin xyz="0 ${link1_width} ${link1_length}" rpy="${-PI_2} ${-PI_2} 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="${left_joint1_lower}" upper="${left_joint1_upper}" effort="${joint1_effort}" velocity="${joint1_velocity}"/>
+  </joint>
+
+  <link name="left_link_2">
+    <visual>
+      <geometry>
+        <cylinder radius="0.035" length="${link2_length}"/>
+      </geometry>
+      <origin xyz="0 ${link2_length/2} ${link2_width/2}" rpy="0 0 0"/>
+      <material name="green">
+        <color rgba="0.0 0.8 0.0 1.0"/>
+      </material>
+    </visual>
+    <inertial>
+      <mass value="0.25"/>
+      <origin xyz="0 ${link2_length/2} ${link2_width/2}" rpy="0 0 0"/>
+      <inertia ixx="0.0008" ixy="0.0" ixz="0.0" iyy="0.0008" iyz="0.0" izz="0.0004"/>
+    </inertial>
+  </link>
+
+  <!-- Joint 2 Left - Elbow -->
+  <joint name="left_joint_2" type="revolute">
+    <parent link="left_link_2"/>
+    <child link="left_link_3"/>
+    <origin xyz="${link2_length} 0 ${link2_width}" rpy="${PI_2} 0 ${PI_2}"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="${left_joint2_lower}" upper="${left_joint2_upper}" effort="${joint2_effort}" velocity="${joint2_velocity}"/>
+  </joint>
+
+  <link name="left_link_3">
+    <visual>
+      <geometry>
+        <cylinder radius="0.03" length="${-link3_length}"/>
+      </geometry>
+      <origin xyz="0 0 ${link3_length/2}" rpy="0 0 0"/>
+      <material name="red">
+        <color rgba="0.8 0.0 0.0 1.0"/>
+      </material>
+    </visual>
+    <inertial>
+      <mass value="0.2"/>
+      <origin xyz="0 0 ${link3_length/2}" rpy="0 0 0"/>
+      <inertia ixx="0.0005" ixy="0.0" ixz="0.0" iyy="0.0005" iyz="0.0" izz="0.0003"/>
+    </inertial>
+  </link>
+
+  <!-- Joint 3 Left - Wrist -->
+  <joint name="left_joint_3" type="revolute">
+    <parent link="left_link_3"/>
+    <child link="left_link_4"/>
+    <origin xyz="0 0 ${link3_length}" rpy="${-PI_2} ${-PI_2} 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="${left_joint3_lower}" upper="${left_joint3_upper}" effort="${joint3_effort}" velocity="${joint3_velocity}"/>
+  </joint>
+
+  <link name="left_link_4">
+    <visual>
+      <geometry>
+        <cylinder radius="0.025" length="${-link4_length}"/>
+      </geometry>
+      <origin xyz="0 ${link4_length/2} 0" rpy="0 0 0"/>
+      <material name="yellow">
+        <color rgba="0.8 0.8 0.0 1.0"/>
+      </material>
+    </visual>
+    <inertial>
+      <mass value="0.15"/>
+      <origin xyz="0 ${link4_length/2} 0" rpy="0 0 0"/>
+      <inertia ixx="0.0003" ixy="0.0" ixz="0.0" iyy="0.0003" iyz="0.0" izz="0.0002"/>
+    </inertial>
+  </link>
+
+  <!-- End Effector Left -->
+  <joint name="left_ee_joint" type="fixed">
+    <parent link="left_link_4"/>
+    <child link="left_end_effector"/>
+    <origin xyz="${link4_length + ee_offset} 0 0" rpy="0 ${-PI_2} ${-PI_2}"/>
+  </joint>
+
+  <link name="left_end_effector">
+    <visual>
+      <geometry>
+        <sphere radius="0.02"/>
+      </geometry>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <material name="orange">
+        <color rgba="1.0 0.5 0.0 1.0"/>
+      </material>
+    </visual>
+    <inertial>
+      <mass value="0.05"/>
+      <inertia ixx="0.0001" ixy="0.0" ixz="0.0" iyy="0.0001" iyz="0.0" izz="0.0001"/>
+    </inertial>
+  </link>
+
+</robot>

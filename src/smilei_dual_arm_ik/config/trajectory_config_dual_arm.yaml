@@ -1,0 +1,74 @@
+# Dual Arm Trajectory Configuration
+# Defines waypoints for both right and left arms
+
+# Trajectory planning parameters
+trajectory_params:
+  interpolation_method: 'cubic'  # 'linear' or 'cubic'
+  steps_per_segment: 50         # Number of interpolation steps between waypoints
+  execution_rate: 10.0          # Hz - how fast to execute trajectory
+  synchronized: true            # If true, both arms move through waypoints together
+
+# Right arm target waypoints (in base_link frame)
+# Format: list of {x, y, z} positions in meters
+right_arm_waypoints:
+  
+  # Waypoint 1: Starting position
+  - x: 0.170
+    y: 0.010
+    z: 0.450
+
+  # Waypoint 2: Move right
+  - x: 0.290
+    y: 0.030
+    z: 0.460
+
+  # Waypoint 3: Move down and left
+  - x: 0.310
+    y: 0.060
+    z: 0.350
+
+  # Waypoint 4: Move up
+  - x: 0.220
+    y: 0.060
+    z: 0.220
+
+  # Waypoint 5
+  - x: 0.170
+    y: 0.030
+    z: 0.180
+
+# Left arm target waypoints (in base_link frame)
+# Format: list of {x, y, z} positions in meters
+# Note: Left arm is mirrored, so X positions are typically negative
+left_arm_waypoints:
+  
+  # Waypoint 1: Starting position
+  - x: -0.170
+    y: 0.010
+    z: 0.450
+
+  # Waypoint 2: Move right
+  - x: -0.290
+    y: 0.030
+    z: 0.460
+
+  # Waypoint 3: Move down and left
+  - x: -0.310
+    y: 0.060
+    z: 0.350
+
+  # Waypoint 4: Move up
+  - x: -0.220
+    y: 0.060
+    z: 0.220
+
+  # Waypoint 5
+  - x: -0.170
+    y: 0.030
+    z: 0.180
+
+# Notes:
+# - If synchronized=true, both arms must have the same number of waypoints
+# - Waypoints should be within the workspace of each arm
+# - The system will solve IK for each waypoint and plan smooth trajectories
+# - Green path = right arm trajectory, Blue path = left arm trajectory in RViz

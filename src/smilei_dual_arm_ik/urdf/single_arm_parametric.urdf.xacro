@@ -36,7 +36,7 @@
   <xacro:arg name="link2_width" default="0.20"/>
   <xacro:property name="link2_width" value="$(arg link2_width)"/>
 
-  <xacro:arg name="link3_length" default="-0.2"/>
+  <xacro:arg name="link3_length" default="0.2"/>
   <xacro:property name="link3_length" value="$(arg link3_length)"/>
 
   <xacro:arg name="link4_length" default="-0.08"/>
@@ -179,7 +179,7 @@
   <joint name="joint_2" type="revolute">
     <parent link="link_2"/>
     <child link="link_3"/>
-    <origin xyz="0 ${link2_length} ${link2_width}" rpy="${PI_2} 0 0"/>
+    <origin xyz="0 ${link2_length} ${link2_width}" rpy="${-PI_2} ${-PI_2} 0"/>
     <axis xyz="0 0 1"/>
     <limit lower="${joint2_lower}" upper="${joint2_upper}" effort="${joint2_effort}" velocity="${joint2_velocity}"/>
   </joint>
@@ -205,7 +205,7 @@
   <joint name="joint_3" type="revolute">
     <parent link="link_3"/>
     <child link="link_4"/>
-    <origin xyz="0 0 ${link3_length}" rpy="${PI_2} 0 0"/>
+    <origin xyz="0 0 ${link3_length}" rpy="${PI_2} 0 ${PI_2}"/>
     <axis xyz="0 0 1"/>
     <limit lower="${joint3_lower}" upper="${joint3_upper}" effort="${joint3_effort}" velocity="${joint3_velocity}"/>
   </joint>
@@ -231,7 +231,7 @@
   <joint name="end_effector_joint" type="fixed">
     <parent link="link_4"/>
     <child link="end_effector"/>
-    <origin xyz="0 ${link4_length + ee_offset} 0" rpy="-${PI_2} 0 -${PI_2}"/>
+    <origin xyz="0 ${link4_length + ee_offset} 0" rpy="${PI_2} 0 ${PI_2}"/>
   </joint>
 
   <link name="end_effector">
