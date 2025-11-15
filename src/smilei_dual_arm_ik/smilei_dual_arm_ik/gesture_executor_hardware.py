@@ -140,9 +140,9 @@ class GestureExecutorHardware(Node):
         self.last_joint_state = None
         self.control_active = False
 
-        # Timer for maintaining control loop (100 Hz for smooth control)
+        # Timer for maintaining control loop (1000 Hz = 1 kHz for ultra-smooth control)
         self.control_timer = self.create_timer(
-            0.01,  # 100 Hz
+            0.001,  # 1000 Hz (1ms) - Very high frequency for precise control
             self.control_loop_callback
         )
 
@@ -751,7 +751,7 @@ class GestureExecutorHardware(Node):
         if total_points == 0:
             return True
 
-        execution_rate = 10.0  # Hz
+        execution_rate = 100.0  # Hz - High frequency setpoint updates
         sleep_time = 1.0 / execution_rate
 
         for i in range(total_points):
