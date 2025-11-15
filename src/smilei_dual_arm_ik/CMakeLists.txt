@@ -33,6 +33,7 @@ install(PROGRAMS
   smilei_dual_arm_ik/trajectory_executor_node.py
   smilei_dual_arm_ik/trajectory_executor_dual_arm.py
   smilei_dual_arm_ik/gesture_executor_dual_arm.py
+  smilei_dual_arm_ik/gesture_executor_hardware.py
   smilei_dual_arm_ik/interactive_marker_node.py
   DESTINATION lib/${PROJECT_NAME}
 )

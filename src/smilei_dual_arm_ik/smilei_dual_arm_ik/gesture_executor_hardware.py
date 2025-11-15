@@ -1,0 +1,847 @@
+#!/usr/bin/env python3
+"""
+Gesture Executor Hardware - Action Server for Real BEAR Motors
+
+Controls real BEAR motors using current control mode with PD algorithm.
+Based on gesture_executor_dual_arm.py and remote_teleoperation.py
+"""
+
+import rclpy
+from rclpy.node import Node
+from rclpy.action import ActionServer, CancelResponse, GoalResponse
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
+from sensor_msgs.msg import JointState
+from geometry_msgs.msg import Point
+from visualization_msgs.msg import Marker, MarkerArray
+from std_msgs.msg import ColorRGBA
+from smilei_dual_arm_ik.action import ExecuteGesture
+import numpy as np
+import yaml
+import os
+import time
+from ament_index_python.packages import get_package_share_directory
+
+from smilei_dual_arm_ik.inverse_kinematics_dual_arm import InverseKinematicsDualArm
+from smilei_dual_arm_ik.trajectory_planner_dual_arm import TrajectoryPlannerDualArm
+
+# Import HardwareManager from smilei_state_machine
+import sys
+sys.path.append('/home/rovestrada/smilei_ws/src/smilei_state_machine')
+from smilei_state_machine.hardware_manager import HardwareManager
+
+
+class GestureExecutorHardware(Node):
+    """
+    ROS2 Action Server that executes predefined gestures using real BEAR motors
+    """
+
+    def __init__(self):
+        super().__init__('gesture_executor_hardware')
+
+        # Declare parameters for hardware
+        self.declare_parameter('robot_params_file', '')
+        self.declare_parameter('gestures_directory', '')
+        self.declare_parameter('hardware_manager.usb_ports', ['/dev/ttyUSB0', '/dev/ttyUSB1'])
+        self.declare_parameter('hardware_manager.baudrate', 8000000)
+        self.declare_parameter('hardware_manager.auto_detect', True)
+        self.declare_parameter('hardware_manager.debug', False)
+
+        # Load parameters
+        robot_params_file = self.get_parameter('robot_params_file').value
+        if not robot_params_file:
+            pkg_share = get_package_share_directory('smilei_dual_arm_ik')
+            robot_params_file = os.path.join(pkg_share, 'config', 'robot_parameters.yaml')
+
+        gestures_dir = self.get_parameter('gestures_directory').value
+        if not gestures_dir:
+            pkg_share = get_package_share_directory('smilei_dual_arm_ik')
+            gestures_dir = os.path.join(pkg_share, 'config', 'gestures')
+
+        self.gestures_directory = gestures_dir
+
+        # Hardware manager parameters
+        usb_ports = self.get_parameter('hardware_manager.usb_ports').value
+        baudrate = self.get_parameter('hardware_manager.baudrate').value
+        auto_detect = self.get_parameter('hardware_manager.auto_detect').value
+        debug = self.get_parameter('hardware_manager.debug').value
+
+        # Initialize hardware manager
+        self.get_logger().info('Initializing hardware manager for gesture executor...')
+        self.hardware_manager = HardwareManager(
+            node=self,
+            usb_ports=usb_ports,
+            baudrate=baudrate,
+            auto_detect=auto_detect,
+            debug=debug
+        )
+
+        # Get available motors
+        self.motor_ids = self.hardware_manager.get_available_motors()
+        if not self.motor_ids:
+            self.get_logger().warning('No motors detected - running in simulation mode')
+            self.motor_ids = [1, 2, 3, 4, 5, 6, 7, 8]  # Default fallback
+
+        self.get_logger().info(f'Detected motors: {self.motor_ids}')
+
+        # Motor IDs mapping (assuming standard dual arm configuration)
+        # Right arm: motors 5,6,7,8 (IDs from hardware)
+        # Left arm: motors 1,2,3,4 (IDs from hardware)
+        self.right_motor_ids = [5, 6, 7, 8]
+        self.left_motor_ids = [1, 2, 3, 4]
+
+        # Initialize IK solver and trajectory planner
+        self.ik_solver = InverseKinematicsDualArm(robot_params_file)
+        self.trajectory_planner = TrajectoryPlannerDualArm()
+
+        # Publisher for joint commands (for visualization in RViz)
+        self.joint_pub = self.create_publisher(
+            JointState,
+            '/joint_states',
+            10
+        )
+
+        # Publishers for visualization
+        self.marker_pub = self.create_publisher(
+            MarkerArray,
+            '/trajectory_markers',
+            10
+        )
+
+        # PD Control Parameters (from remote_teleoperation.py)
+        self.kp = 1.0        # Proportional gain
+        self.kp_motor7 = 0.5  # Specific for motor 7
+        self.kd = 0.1        # Damping gain
+
+        # Non-linear PD parameters
+        self.r1 = 0.4
+        self.r2 = 0.3
+        self.p1 = (2*self.r2 - self.r1) / self.r1
+        self.p2 = (2*self.r2 - self.r1) / self.r2
+
+        # Velocity estimator parameters
+        self.Fc = 35         # Frequency cutoff
+        self.Tl = 0.002      # Loop frequency
+
+        # Safety limits
+        self.max_current = 5.0              # Maximum current (A)
+        self.Kt = 0.35                      # Torque constant
+
+        # Motor state variables
+        self.current_positions = [0.0] * 8
+        self.current_velocities = [0.0] * 8
+        self.target_positions = [0.0] * 8
+
+        # Velocity estimators (one per motor)
+        self.theta_estimators = [0.0] * 8
+        self.vel_estimators = [0.0] * 8
+
+        # State
+        self.last_joint_state = None
+        self.control_active = False
+
+        # Timer for maintaining control loop (100 Hz for smooth control)
+        self.control_timer = self.create_timer(
+            0.01,  # 100 Hz
+            self.control_loop_callback
+        )
+
+        # Setup motors
+        self.setup_motors()
+
+        # Initialize default joint state
+        self.initialize_default_joint_state()
+
+        # Create action server with reentrant callback group
+        callback_group = ReentrantCallbackGroup()
+        self._action_server = ActionServer(
+            self,
+            ExecuteGesture,
+            'execute_gesture',
+            execute_callback=self.execute_callback,
+            goal_callback=self.goal_callback,
+            cancel_callback=self.cancel_callback,
+            callback_group=callback_group
+        )
+
+        self.get_logger().info('Gesture Executor Hardware initialized')
+        self.get_logger().info(f'  Gestures directory: {self.gestures_directory}')
+        self.get_logger().info(f'  Robot params: {robot_params_file}')
+        self.get_logger().info(f'  Motors: {self.motor_ids}')
+
+    def setup_motors(self):
+        """Configure motors for current control mode"""
+        try:
+            if not self.hardware_manager:
+                self.get_logger().info('[SIM] Configuring motors')
+                return True
+
+            self.get_logger().info('Configuring motors for current control...')
+
+            # Configure PID gains for current control (from remote_teleoperation.py)
+            for motor_id in self.motor_ids:
+                self.hardware_manager.set_p_gain_iq((motor_id, 0.277))
+                self.hardware_manager.set_i_gain_iq((motor_id, 0.061))
+                self.hardware_manager.set_d_gain_iq((motor_id, 0))
+                self.hardware_manager.set_p_gain_id((motor_id, 0.277))
+                self.hardware_manager.set_i_gain_id((motor_id, 0.061))
+                self.hardware_manager.set_d_gain_id((motor_id, 0))
+
+                # Set current control mode (mode 0)
+                self.hardware_manager.set_mode((motor_id, 0))
+
+                # Enable torque
+                self.hardware_manager.set_torque_enable((motor_id, 1))
+
+            self.get_logger().info('✅ Motors configured for current control')
+            return True
+
+        except Exception as e:
+            self.get_logger().error(f'Error configuring motors: {e}')
+            return False
+
+    def initialize_default_joint_state(self):
+        """Initialize joint state with default position (all zeros)"""
+        joint_msg = JointState()
+        joint_msg.header.stamp = self.get_clock().now().to_msg()
+        joint_msg.name = [
+            'right_joint_0', 'right_joint_1', 'right_joint_2', 'right_joint_3',
+            'left_joint_0', 'left_joint_1', 'left_joint_2', 'left_joint_3'
+        ]
+        joint_msg.position = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+        self.last_joint_state = joint_msg
+        self.joint_pub.publish(joint_msg)
+        self.get_logger().info('Published initial joint state (all zeros)')
+
+    def get_motor_states(self):
+        """Read current positions and velocities from motors"""
+        try:
+            if not self.hardware_manager:
+                return True
+
+            # Get positions and velocities for all motors
+            positions = self.hardware_manager.get_present_position(*self.motor_ids)
+            velocities = self.hardware_manager.get_present_velocity(*self.motor_ids)
+
+            if len(positions) == len(self.motor_ids) and len(velocities) == len(self.motor_ids):
+                self.current_positions = positions[:]
+                self.current_velocities = velocities[:]
+                return True
+            else:
+                return True  # Keep previous values
+
+        except Exception as e:
+            self.get_logger().debug(f'Error reading motor states: {e}')
+            return True
+
+    def calculate_control_currents(self):
+        """Calculate PD control currents for all motors"""
+        currents = []
+
+        for i, motor_id in enumerate(self.motor_ids):
+            if i >= len(self.target_positions) or i >= len(self.current_positions):
+                currents.append(0.0)
+                continue
+
+            target_pos = self.target_positions[i]
+            current_pos = self.current_positions[i]
+
+            # Position error
+            error = current_pos - target_pos
+
+            # Velocity estimation
+            if i < len(self.vel_estimators):
+                self.vel_estimators[i] = self.Fc * (self.theta_estimators[i] + current_pos)
+                self.theta_estimators[i] = self.theta_estimators[i] - self.Tl * self.vel_estimators[i]
+                vel_estimate = self.vel_estimators[i]
+            else:
+                vel_estimate = 0.0
+
+            # Use specific kp for motor 7
+            kp_value = self.kp_motor7 if motor_id == 7 else self.kp
+
+            # Non-linear PD control
+            tau = -kp_value * ((abs(error)**self.p1) * np.sign(error)) - self.kd * vel_estimate
+
+            # Convert torque to current
+            current = tau / self.Kt
+
+            # Apply safety limits
+            current = max(-self.max_current, min(self.max_current, current))
+
+            currents.append(current)
+
+        return currents
+
+    def send_current_commands(self, currents):
+        """Send current commands to motors"""
+        try:
+            if not self.hardware_manager:
+                return True
+
+            # Create current pairs
+            current_pairs = []
+            for i, motor_id in enumerate(self.motor_ids):
+                if i < len(currents):
+                    current_pairs.append((motor_id, currents[i]))
+
+            # Send currents
+            success = self.hardware_manager.set_goal_iq(*current_pairs)
+            return success
+
+        except Exception as e:
+            self.get_logger().error(f'Error sending currents: {e}')
+            return False
+
+    def control_loop_callback(self):
+        """High-frequency control loop (100 Hz)"""
+        if not self.control_active:
+            return
+
+        # Read motor states
+        self.get_motor_states()
+
+        # Calculate control currents
+        currents = self.calculate_control_currents()
+
+        # Send current commands
+        self.send_current_commands(currents)
+
+    def goal_callback(self, goal_request):
+        """Accept or reject a client request to begin an action"""
+        self.get_logger().info(f'Received goal request for gesture: {goal_request.gesture_name}')
+
+        # Check if gesture file exists
+        gesture_file = os.path.join(self.gestures_directory, f'{goal_request.gesture_name}.yaml')
+        if not os.path.exists(gesture_file):
+            self.get_logger().error(f'Gesture file not found: {gesture_file}')
+            return GoalResponse.REJECT
+
+        return GoalResponse.ACCEPT
+
+    def cancel_callback(self, goal_handle):
+        """Accept or reject a client request to cancel an action"""
+        self.get_logger().info('Received cancel request')
+        return CancelResponse.ACCEPT
+
+    async def execute_callback(self, goal_handle):
+        """Execute the gesture action"""
+        self.get_logger().info(f'Executing gesture: {goal_handle.request.gesture_name}')
+
+        feedback_msg = ExecuteGesture.Feedback()
+        result = ExecuteGesture.Result()
+        start_time = time.time()
+
+        try:
+            # Phase 1: Load gesture configuration
+            feedback_msg.current_phase = 'loading'
+            feedback_msg.progress = 0.0
+            goal_handle.publish_feedback(feedback_msg)
+
+            gesture_config = self.load_gesture_config(goal_handle.request.gesture_name)
+            if gesture_config is None:
+                result.success = False
+                result.message = f'Failed to load gesture: {goal_handle.request.gesture_name}'
+                result.execution_time = time.time() - start_time
+                return result
+
+            # Phase 2: Solve IK for all waypoints
+            feedback_msg.current_phase = 'solving_ik'
+            feedback_msg.progress = 0.2
+            feedback_msg.total_waypoints = max(
+                len(gesture_config['right_waypoints']),
+                len(gesture_config['left_waypoints'])
+            )
+            goal_handle.publish_feedback(feedback_msg)
+
+            right_angles, left_angles = self.solve_ik_for_both_arms(
+                gesture_config['right_waypoints'],
+                gesture_config['left_waypoints']
+            )
+
+            if len(right_angles) < 2 and len(left_angles) < 2:
+                result.success = False
+                result.message = 'Not enough valid IK solutions'
+                result.execution_time = time.time() - start_time
+                return result
+
+            # Phase 3: Plan trajectory
+            feedback_msg.current_phase = 'planning'
+            feedback_msg.progress = 0.4
+            goal_handle.publish_feedback(feedback_msg)
+
+            trajectory = self.plan_dual_arm_trajectory(
+                right_angles,
+                left_angles,
+                gesture_config['steps_per_segment'],
+                gesture_config['synchronized'],
+                gesture_config['interpolation_method']
+            )
+
+            # Visualize trajectory
+            self.visualize_trajectory(trajectory)
+
+            # Phase 4: Create transition from current position
+            feedback_msg.current_phase = 'transitioning'
+            feedback_msg.progress = 0.45
+            goal_handle.publish_feedback(feedback_msg)
+
+            transition_trajectory = self.create_transition_trajectory(
+                trajectory,
+                gesture_config['interpolation_method']
+            )
+
+            # Phase 5: Execute trajectory (with transition)
+            feedback_msg.current_phase = 'executing'
+            feedback_msg.progress = 0.5
+            goal_handle.publish_feedback(feedback_msg)
+
+            # Activate control loop
+            self.control_active = True
+
+            execution_success = self.execute_trajectory_with_transition(
+                transition_trajectory,
+                trajectory,
+                goal_handle,
+                feedback_msg
+            )
+
+            # Deactivate control loop
+            self.control_active = False
+
+            if not execution_success:
+                result.success = False
+                result.message = 'Trajectory execution was cancelled'
+                result.execution_time = time.time() - start_time
+                return result
+
+            # Success!
+            result.success = True
+            result.message = f'Gesture "{goal_handle.request.gesture_name}" executed successfully'
+            result.execution_time = time.time() - start_time
+
+            self.get_logger().info(
+                f'✅ Gesture completed: {result.message} in {result.execution_time:.2f}s'
+            )
+
+            goal_handle.succeed()
+            return result
+
+        except Exception as e:
+            self.get_logger().error(f'Error executing gesture: {e}')
+            self.control_active = False
+            result.success = False
+            result.message = f'Error: {str(e)}'
+            result.execution_time = time.time() - start_time
+            goal_handle.abort()
+            return result
+
+    def load_gesture_config(self, gesture_name):
+        """Load gesture configuration from YAML file"""
+        try:
+            gesture_file = os.path.join(self.gestures_directory, f'{gesture_name}.yaml')
+            self.get_logger().info(f'Loading gesture from: {gesture_file}')
+
+            with open(gesture_file, 'r') as f:
+                config = yaml.safe_load(f)
+
+            # Extract waypoints
+            right_waypoints_config = config.get('right_arm_waypoints', [])
+            right_waypoints = [
+                np.array([wp['x'], wp['y'], wp['z']])
+                for wp in right_waypoints_config
+            ]
+
+            left_waypoints_config = config.get('left_arm_waypoints', [])
+            left_waypoints = [
+                np.array([wp['x'], wp['y'], wp['z']])
+                for wp in left_waypoints_config
+            ]
+
+            # Extract execution parameters
+            synchronized = config.get('synchronized', True)
+            interpolation_method = config.get('interpolation_method', 'cubic')
+            steps_per_segment = config.get('steps_per_segment', 50)
+
+            self.get_logger().info(
+                f'Loaded gesture "{gesture_name}": '
+                f'{len(right_waypoints)} right waypoints, '
+                f'{len(left_waypoints)} left waypoints, '
+                f'synchronized={synchronized}'
+            )
+
+            return {
+                'right_waypoints': right_waypoints,
+                'left_waypoints': left_waypoints,
+                'synchronized': synchronized,
+                'interpolation_method': interpolation_method,
+                'steps_per_segment': steps_per_segment
+            }
+
+        except Exception as e:
+            self.get_logger().error(f'Failed to load gesture config: {e}')
+            return None
+
+    def solve_ik_for_both_arms(self, right_waypoints, left_waypoints):
+        """Solve IK for all waypoints for both arms"""
+        self.get_logger().info('='*60)
+        self.get_logger().info('Solving IK for both arms...')
+
+        right_joint_angles = []
+        left_joint_angles = []
+
+        # Solve for right arm
+        if right_waypoints:
+            self.get_logger().info('Right Arm:')
+            for i, waypoint in enumerate(right_waypoints):
+                solution = self.ik_solver.solve_ik_right_arm_multiple_attempts(waypoint)
+
+                if solution['success']:
+                    self.get_logger().info(
+                        f'  ✅ Waypoint {i}: Target={waypoint}, Error={solution["position_error"]:.6f}m'
+                    )
+                    right_joint_angles.append(solution['joint_angles'])
+                else:
+                    self.get_logger().error(
+                        f'  ❌ Waypoint {i}: Failed (Error: {solution["position_error"]*100:.2f}cm)'
+                    )
+
+        # Solve for left arm
+        if left_waypoints:
+            self.get_logger().info('Left Arm:')
+            for i, waypoint in enumerate(left_waypoints):
+                solution = self.ik_solver.solve_ik_left_arm_multiple_attempts(waypoint)
+
+                if solution['success']:
+                    self.get_logger().info(
+                        f'  ✅ Waypoint {i}: Target={waypoint}, Error={solution["position_error"]:.6f}m'
+                    )
+                    left_joint_angles.append(solution['joint_angles'])
+                else:
+                    self.get_logger().error(
+                        f'  ❌ Waypoint {i}: Failed (Error: {solution["position_error"]*100:.2f}cm)'
+                    )
+
+        self.get_logger().info('='*60)
+
+        return right_joint_angles, left_joint_angles
+
+    def plan_dual_arm_trajectory(self, right_angles, left_angles,
+                                   steps_per_segment, synchronized, interpolation_method):
+        """Plan smooth trajectory for both arms"""
+        self.get_logger().info('Planning dual arm trajectory...')
+
+        # Create a new planner with the gesture-specific interpolation method
+        planner = TrajectoryPlannerDualArm(interpolation_method=interpolation_method)
+
+        result = planner.plan_dual_arm_trajectory(
+            right_angles,
+            left_angles,
+            num_steps_per_segment=steps_per_segment,
+            synchronized=synchronized
+        )
+
+        self.get_logger().info(f'✅ Dual arm trajectory planned')
+        self.get_logger().info(f'   Right arm: {result["right_arm"]["num_points"]} points')
+        self.get_logger().info(f'   Left arm: {result["left_arm"]["num_points"]} points')
+
+        return result
+
+    def create_transition_trajectory(self, target_trajectory, interpolation_method='cubic'):
+        """Create a smooth transition trajectory from current position to first point"""
+        # Get current joint positions
+        current_right_angles = np.zeros(4)
+        current_left_angles = np.zeros(4)
+
+        # Read from hardware
+        self.get_motor_states()
+
+        # Map motor positions to arm joint angles
+        # Right arm: motors 5,6,7,8 -> joints 0,1,2,3
+        # Left arm: motors 1,2,3,4 -> joints 0,1,2,3
+        for i in range(4):
+            # Find right motor ID position
+            right_motor_id = self.right_motor_ids[i]
+            if right_motor_id in self.motor_ids:
+                idx = self.motor_ids.index(right_motor_id)
+                current_right_angles[i] = self.current_positions[idx]
+
+            # Find left motor ID position
+            left_motor_id = self.left_motor_ids[i]
+            if left_motor_id in self.motor_ids:
+                idx = self.motor_ids.index(left_motor_id)
+                current_left_angles[i] = self.current_positions[idx]
+
+        # Get first point of target trajectory
+        first_right_angles = target_trajectory['right_arm']['trajectory'][0]
+        first_left_angles = target_trajectory['left_arm']['trajectory'][0]
+
+        # Check if we need a transition
+        right_diff = np.linalg.norm(current_right_angles - first_right_angles)
+        left_diff = np.linalg.norm(current_left_angles - first_left_angles)
+
+        if right_diff < 0.01 and left_diff < 0.01:
+            self.get_logger().info('Already at first waypoint, skipping transition')
+            return {
+                'right_arm': {'trajectory': np.array([]), 'num_points': 0},
+                'left_arm': {'trajectory': np.array([]), 'num_points': 0}
+            }
+
+        self.get_logger().info(
+            f'Creating transition: right_diff={right_diff:.3f}rad, left_diff={left_diff:.3f}rad'
+        )
+
+        # Create transition trajectory (30 steps = 3 seconds at 10Hz)
+        num_transition_steps = 30
+
+        planner = TrajectoryPlannerDualArm(interpolation_method=interpolation_method)
+
+        right_waypoints = [current_right_angles, first_right_angles]
+        left_waypoints = [current_left_angles, first_left_angles]
+
+        transition = planner.plan_dual_arm_trajectory(
+            right_waypoints,
+            left_waypoints,
+            num_steps_per_segment=num_transition_steps,
+            synchronized=True
+        )
+
+        self.get_logger().info(
+            f'✅ Transition trajectory created: {transition["right_arm"]["num_points"]} points'
+        )
+
+        return transition
+
+    def execute_trajectory_with_transition(self, transition_trajectory, main_trajectory,
+                                          goal_handle, feedback_msg):
+        """Execute transition trajectory followed by main trajectory"""
+        # Execute transition if it exists
+        if transition_trajectory['right_arm']['num_points'] > 0:
+            self.get_logger().info('🔄 Executing transition to first waypoint...')
+
+            success = self.execute_single_trajectory(
+                transition_trajectory,
+                goal_handle,
+                feedback_msg,
+                progress_start=0.5,
+                progress_end=0.55
+            )
+
+            if not success:
+                return False
+
+            self.get_logger().info('✅ Transition complete')
+
+        # Execute main trajectory
+        self.get_logger().info('🚀 Executing main gesture trajectory...')
+        success = self.execute_single_trajectory(
+            main_trajectory,
+            goal_handle,
+            feedback_msg,
+            progress_start=0.55,
+            progress_end=1.0
+        )
+
+        return success
+
+    def execute_single_trajectory(self, trajectory, goal_handle, feedback_msg,
+                                  progress_start=0.5, progress_end=1.0):
+        """Execute a single trajectory segment with PD control"""
+        right_traj = trajectory['right_arm']['trajectory']
+        left_traj = trajectory['left_arm']['trajectory']
+        total_points = max(len(right_traj), len(left_traj))
+
+        if total_points == 0:
+            return True
+
+        execution_rate = 10.0  # Hz
+        sleep_time = 1.0 / execution_rate
+
+        for i in range(total_points):
+            # Check if goal is cancelled
+            if goal_handle.is_cancel_requested:
+                self.get_logger().info('Goal cancelled')
+                goal_handle.canceled()
+                return False
+
+            # Get current joint angles for both arms
+            right_angles = right_traj[min(i, len(right_traj) - 1)]
+            left_angles = left_traj[min(i, len(left_traj) - 1)]
+
+            # Update target positions
+            # Map arm joint angles to motor positions
+            # Right arm joints 0,1,2,3 -> motors 5,6,7,8
+            # Left arm joints 0,1,2,3 -> motors 1,2,3,4
+            for j in range(4):
+                # Right arm
+                right_motor_id = self.right_motor_ids[j]
+                if right_motor_id in self.motor_ids:
+                    idx = self.motor_ids.index(right_motor_id)
+                    self.target_positions[idx] = right_angles[j]
+
+                # Left arm
+                left_motor_id = self.left_motor_ids[j]
+                if left_motor_id in self.motor_ids:
+                    idx = self.motor_ids.index(left_motor_id)
+                    self.target_positions[idx] = left_angles[j]
+
+            # Publish joint state for visualization
+            joint_msg = JointState()
+            joint_msg.header.stamp = self.get_clock().now().to_msg()
+            joint_msg.name = [
+                'right_joint_0', 'right_joint_1', 'right_joint_2', 'right_joint_3',
+                'left_joint_0', 'left_joint_1', 'left_joint_2', 'left_joint_3'
+            ]
+            joint_msg.position = list(right_angles) + list(left_angles)
+            self.joint_pub.publish(joint_msg)
+            self.last_joint_state = joint_msg
+
+            # Update feedback
+            progress_range = progress_end - progress_start
+            progress = progress_start + (progress_range * (i / total_points))
+            feedback_msg.progress = progress
+            feedback_msg.current_waypoint = i
+            feedback_msg.total_waypoints = total_points
+
+            if i % 10 == 0:
+                goal_handle.publish_feedback(feedback_msg)
+                self.get_logger().info(
+                    f'Progress: {progress*100:.1f}% ({i}/{total_points})'
+                )
+
+            # Sleep to maintain execution rate
+            # Control loop callback handles the actual motor commands
+            time.sleep(sleep_time)
+
+        return True
+
+    def visualize_trajectory(self, trajectory):
+        """Visualize planned trajectories for both arms in RViz"""
+        marker_array = MarkerArray()
+
+        # Calculate FK for right arm trajectory
+        right_positions = []
+        for joint_angles in trajectory['right_arm']['trajectory']:
+            T = self.ik_solver.forward_kinematics_right_arm(joint_angles)
+            right_positions.append(T[:3, 3])
+
+        # Calculate FK for left arm trajectory
+        left_positions = []
+        for joint_angles in trajectory['left_arm']['trajectory']:
+            T = self.ik_solver.forward_kinematics_left_arm(joint_angles)
+            left_positions.append(T[:3, 3])
+
+        # Visualize right arm trajectory (GREEN)
+        right_path = Marker()
+        right_path.header.frame_id = 'base_link'
+        right_path.header.stamp = self.get_clock().now().to_msg()
+        right_path.ns = 'right_trajectory'
+        right_path.id = 0
+        right_path.type = Marker.LINE_STRIP
+        right_path.action = Marker.ADD
+        right_path.scale.x = 0.005
+        right_path.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=0.8)
+
+        for pos in right_positions:
+            point = Point()
+            point.x, point.y, point.z = pos
+            right_path.points.append(point)
+
+        marker_array.markers.append(right_path)
+
+        # Visualize left arm trajectory (BLUE)
+        left_path = Marker()
+        left_path.header.frame_id = 'base_link'
+        left_path.header.stamp = self.get_clock().now().to_msg()
+        left_path.ns = 'left_trajectory'
+        left_path.id = 1
+        left_path.type = Marker.LINE_STRIP
+        left_path.action = Marker.ADD
+        left_path.scale.x = 0.005
+        left_path.color = ColorRGBA(r=0.0, g=0.0, b=1.0, a=0.8)
+
+        for pos in left_positions:
+            point = Point()
+            point.x, point.y, point.z = pos
+            left_path.points.append(point)
+
+        marker_array.markers.append(left_path)
+
+        # Right arm waypoints (RED)
+        for i, waypoint_idx in enumerate(trajectory['right_arm']['waypoint_indices']):
+            marker = Marker()
+            marker.header.frame_id = 'base_link'
+            marker.header.stamp = self.get_clock().now().to_msg()
+            marker.ns = 'right_waypoints'
+            marker.id = i + 100
+            marker.type = Marker.SPHERE
+            marker.action = Marker.ADD
+
+            pos = right_positions[waypoint_idx]
+            marker.pose.position.x = pos[0]
+            marker.pose.position.y = pos[1]
+            marker.pose.position.z = pos[2]
+            marker.pose.orientation.w = 1.0
+
+            marker.scale.x = 0.05
+            marker.scale.y = 0.05
+            marker.scale.z = 0.05
+            marker.color = ColorRGBA(r=1.0, g=0.0, b=0.0, a=1.0)
+
+            marker_array.markers.append(marker)
+
+        # Left arm waypoints (CYAN)
+        for i, waypoint_idx in enumerate(trajectory['left_arm']['waypoint_indices']):
+            marker = Marker()
+            marker.header.frame_id = 'base_link'
+            marker.header.stamp = self.get_clock().now().to_msg()
+            marker.ns = 'left_waypoints'
+            marker.id = i + 200
+            marker.type = Marker.SPHERE
+            marker.action = Marker.ADD
+
+            pos = left_positions[waypoint_idx]
+            marker.pose.position.x = pos[0]
+            marker.pose.position.y = pos[1]
+            marker.pose.position.z = pos[2]
+            marker.pose.orientation.w = 1.0
+
+            marker.scale.x = 0.05
+            marker.scale.y = 0.05
+            marker.scale.z = 0.05
+            marker.color = ColorRGBA(r=0.0, g=1.0, b=1.0, a=1.0)
+
+            marker_array.markers.append(marker)
+
+        self.marker_pub.publish(marker_array)
+        self.get_logger().info('✅ Trajectory visualization published')
+
+
+def main(args=None):
+    rclpy.init(args=args)
+
+    node = GestureExecutorHardware()
+
+    # Use MultiThreadedExecutor to allow concurrent action execution
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
+
+    try:
+        executor.spin()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        # Stop control
+        node.control_active = False
+
+        # Send zero currents to all motors
+        zero_currents = [0.0] * len(node.motor_ids)
+        node.send_current_commands(zero_currents)
+
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
