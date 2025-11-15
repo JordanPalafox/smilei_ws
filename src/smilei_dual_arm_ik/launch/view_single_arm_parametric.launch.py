@@ -68,7 +68,7 @@ def launch_setup(context, *args, **kwargs):
     # Forward Kinematics Node (URDF-based with YAML parameters)
     forward_kinematics_node = Node(
         package='smilei_dual_arm_ik',
-        executable='forward_kinematics_urdf_based',
+        executable='forward_kinematics_urdf_based.py',
         name='forward_kinematics_urdf_based',
         output='screen',
         parameters=[{'robot_params_file': params_file}]

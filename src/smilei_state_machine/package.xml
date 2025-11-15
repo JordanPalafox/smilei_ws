@@ -12,7 +12,8 @@
   <depend>py_trees_ros</depend>
   <depend>westwood_motor_interfaces</depend>
   <depend>westwood_motor_control_sdk_wrapper</depend>
-  
+  <depend>smilei_dual_arm_ik</depend>
+
   <exec_depend>python3-numpy</exec_depend>
 
   <test_depend>ament_copyright</test_depend>

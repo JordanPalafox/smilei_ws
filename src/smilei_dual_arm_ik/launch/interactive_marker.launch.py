@@ -71,7 +71,7 @@ def launch_setup(context, *args, **kwargs):
     # Set launch_interactive_marker:=true to launch it from here
     interactive_marker_node = Node(
         package='smilei_dual_arm_ik',
-        executable='interactive_marker_node',
+        executable='interactive_marker_node.py',
         name='interactive_marker_node',
         output='screen',
         parameters=[{

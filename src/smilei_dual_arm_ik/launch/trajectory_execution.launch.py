@@ -66,7 +66,7 @@ def launch_setup(context, *args, **kwargs):
     # Trajectory Executor Node
     trajectory_executor_node = Node(
         package='smilei_dual_arm_ik',
-        executable='trajectory_executor_node',
+        executable='trajectory_executor_node.py',
         name='trajectory_executor_node',
         output='screen',
         parameters=[{

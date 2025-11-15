@@ -1,0 +1,13 @@
+# Goal: Name of the gesture/routine to execute
+string gesture_name
+---
+# Result: Execution outcome
+bool success
+string message
+float32 execution_time
+---
+# Feedback: Execution progress
+float32 progress          # 0.0 to 1.0
+string current_phase      # "loading", "solving_ik", "planning", "executing"
+int32 current_waypoint    # Current waypoint being executed
+int32 total_waypoints     # Total number of waypoints

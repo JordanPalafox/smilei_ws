@@ -1,17 +1,18 @@
+#!/usr/bin/env python3
+"""
+Launch file for Gesture Executor Action Server
+
+Launches the gesture executor node along with visualization tools
+"""
+
+import launch
+import os
 from launch import LaunchDescription
-from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration, Command
+from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
-import os
 import yaml
-
-
-def load_yaml_params(yaml_file):
-    """Load parameters from YAML file"""
-    with open(yaml_file, 'r') as f:
-        config = yaml.safe_load(f)
-    return config.get('robot_geometry', {})
 
 
 def generate_xacro_args(params):
@@ -30,11 +31,14 @@ def launch_setup(context, *args, **kwargs):
 
     # Paths to files
     xacro_file = os.path.join(pkg_share, 'urdf', 'dual_arm_parametric.urdf.xacro')
-    params_file = os.path.join(pkg_share, 'config', 'robot_parameters.yaml')
+    robot_params_file = os.path.join(pkg_share, 'config', 'robot_parameters.yaml')
+    gestures_directory = os.path.join(pkg_share, 'config', 'gestures')
     rviz_config_file = os.path.join(pkg_share, 'rviz', 'dual_arm.rviz')
 
     # Load robot parameters from YAML
-    robot_params = load_yaml_params(params_file)
+    with open(robot_params_file, 'r') as f:
+        config = yaml.safe_load(f)
+    robot_params = config.get('robot_geometry', {})
 
     # Generate xacro arguments from parameters
     xacro_args = generate_xacro_args(robot_params)
@@ -43,7 +47,7 @@ def launch_setup(context, *args, **kwargs):
     robot_desc = Command(['xacro ', xacro_file, ' ', xacro_args])
 
     # Get launch configuration
-    use_sim_time = LaunchConfiguration('use_sim_time')
+    use_rviz = LaunchConfiguration('use_rviz')
 
     # Robot State Publisher Node
     robot_state_publisher_node = Node(
@@ -53,52 +57,44 @@ def launch_setup(context, *args, **kwargs):
         output='screen',
         parameters=[{
             'robot_description': robot_desc,
-            'use_sim_time': use_sim_time
+            'use_sim_time': False
         }]
     )
 
-    # Joint State Publisher GUI Node
-    joint_state_publisher_gui_node = Node(
-        package='joint_state_publisher_gui',
-        executable='joint_state_publisher_gui',
-        name='joint_state_publisher_gui',
-        output='screen'
-    )
-
-    # Forward Kinematics Node (Dual Arm)
-    forward_kinematics_node = Node(
+    # Gesture Executor Action Server Node
+    gesture_executor_node = Node(
         package='smilei_dual_arm_ik',
-        executable='forward_kinematics_dual_arm.py',
-        name='forward_kinematics_dual_arm',
+        executable='gesture_executor_dual_arm.py',
+        name='gesture_executor_dual_arm',
         output='screen',
-        parameters=[{'robot_params_file': params_file}]
+        parameters=[{
+            'gestures_directory': gestures_directory,
+            'robot_params_file': robot_params_file,
+        }]
     )
 
-    # RViz Node
+    # RViz Node (optional)
     rviz_node = Node(
         package='rviz2',
         executable='rviz2',
         name='rviz2',
-        output='screen',
         arguments=['-d', rviz_config_file] if os.path.exists(rviz_config_file) else [],
-        parameters=[{'use_sim_time': use_sim_time}],
-        on_exit=None
+        condition=launch.conditions.IfCondition(use_rviz)
     )
 
     return [
         robot_state_publisher_node,
-        joint_state_publisher_gui_node,
-        forward_kinematics_node,
-        rviz_node
+        gesture_executor_node,
+        rviz_node,
     ]
 
 
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
-            'use_sim_time',
-            default_value='false',
-            description='Use simulation time'
+            'use_rviz',
+            default_value='true',
+            description='Launch RViz for visualization'
         ),
         OpaqueFunction(function=launch_setup)
     ])
