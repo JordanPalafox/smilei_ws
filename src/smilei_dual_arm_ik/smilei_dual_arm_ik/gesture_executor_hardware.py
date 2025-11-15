@@ -632,16 +632,20 @@ class GestureExecutorHardware(Node):
 
     def create_transition_trajectory(self, target_trajectory, interpolation_method='cubic'):
         """Create a smooth transition trajectory from current position to first point"""
+        self.get_logger().info('🔍 Starting transition trajectory creation...')
+
         # Get current joint positions
         current_right_angles = np.zeros(4)
         current_left_angles = np.zeros(4)
 
         # Read from hardware
+        self.get_logger().info('Reading current motor states...')
         self.get_motor_states()
+        self.get_logger().info(f'Current motor positions: {self.current_positions}')
 
         # Map motor positions to arm joint angles
-        # Right arm: motors 5,6,7,8 -> joints 0,1,2,3
-        # Left arm: motors 1,2,3,4 -> joints 0,1,2,3
+        # Right arm: motors 1,2,3,4 -> joints 0,1,2,3
+        # Left arm: motors 5,6,7,8 -> joints 0,1,2,3
         for i in range(4):
             # Find right motor ID position
             right_motor_id = self.right_motor_ids[i]
@@ -655,13 +659,21 @@ class GestureExecutorHardware(Node):
                 idx = self.motor_ids.index(left_motor_id)
                 current_left_angles[i] = self.current_positions[idx]
 
+        self.get_logger().info(f'Current right angles: {current_right_angles}')
+        self.get_logger().info(f'Current left angles: {current_left_angles}')
+
         # Get first point of target trajectory
         first_right_angles = target_trajectory['right_arm']['trajectory'][0]
         first_left_angles = target_trajectory['left_arm']['trajectory'][0]
 
+        self.get_logger().info(f'Target first right angles: {first_right_angles}')
+        self.get_logger().info(f'Target first left angles: {first_left_angles}')
+
         # Check if we need a transition
         right_diff = np.linalg.norm(current_right_angles - first_right_angles)
         left_diff = np.linalg.norm(current_left_angles - first_left_angles)
+
+        self.get_logger().info(f'Difference - right: {right_diff:.3f}rad, left: {left_diff:.3f}rad')
 
         if right_diff < 0.01 and left_diff < 0.01:
             self.get_logger().info('Already at first waypoint, skipping transition')
@@ -677,11 +689,13 @@ class GestureExecutorHardware(Node):
         # Create transition trajectory (30 steps = 3 seconds at 10Hz)
         num_transition_steps = 30
 
+        self.get_logger().info(f'Creating planner with method: {interpolation_method}')
         planner = TrajectoryPlannerDualArm(interpolation_method=interpolation_method)
 
         right_waypoints = [current_right_angles, first_right_angles]
         left_waypoints = [current_left_angles, first_left_angles]
 
+        self.get_logger().info('Planning transition trajectory...')
         transition = planner.plan_dual_arm_trajectory(
             right_waypoints,
             left_waypoints,
