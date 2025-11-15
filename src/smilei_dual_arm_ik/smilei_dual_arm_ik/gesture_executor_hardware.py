@@ -146,11 +146,17 @@ class GestureExecutorHardware(Node):
             self.control_loop_callback
         )
 
+        # Timer for publishing joint states for visualization (10 Hz)
+        self.viz_timer = self.create_timer(
+            0.1,  # 10 Hz
+            self.visualization_callback
+        )
+
         # Setup motors
         self.setup_motors()
 
-        # Initialize default joint state
-        self.initialize_default_joint_state()
+        # Initialize joint state with real hardware positions
+        self.initialize_joint_state_from_hardware()
 
         # Create action server with reentrant callback group
         callback_group = ReentrantCallbackGroup()
@@ -200,19 +206,53 @@ class GestureExecutorHardware(Node):
             self.get_logger().error(f'Error configuring motors: {e}')
             return False
 
-    def initialize_default_joint_state(self):
-        """Initialize joint state with default position (all zeros)"""
+    def initialize_joint_state_from_hardware(self):
+        """Initialize joint state with current hardware positions"""
+        # Read current motor positions
+        self.get_motor_states()
+
+        # Initialize target positions to current positions
+        self.target_positions = self.current_positions[:]
+
+        # Create joint state message with real positions
         joint_msg = JointState()
         joint_msg.header.stamp = self.get_clock().now().to_msg()
         joint_msg.name = [
             'right_joint_0', 'right_joint_1', 'right_joint_2', 'right_joint_3',
             'left_joint_0', 'left_joint_1', 'left_joint_2', 'left_joint_3'
         ]
-        joint_msg.position = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+        # Map motor positions to joint positions
+        # Right arm: motors 5,6,7,8 -> joints 0,1,2,3
+        # Left arm: motors 1,2,3,4 -> joints 0,1,2,3
+        right_positions = []
+        left_positions = []
+
+        for i in range(4):
+            # Right arm
+            right_motor_id = self.right_motor_ids[i]
+            if right_motor_id in self.motor_ids:
+                idx = self.motor_ids.index(right_motor_id)
+                right_positions.append(self.current_positions[idx])
+            else:
+                right_positions.append(0.0)
+
+            # Left arm
+            left_motor_id = self.left_motor_ids[i]
+            if left_motor_id in self.motor_ids:
+                idx = self.motor_ids.index(left_motor_id)
+                left_positions.append(self.current_positions[idx])
+            else:
+                left_positions.append(0.0)
+
+        joint_msg.position = right_positions + left_positions
 
         self.last_joint_state = joint_msg
         self.joint_pub.publish(joint_msg)
-        self.get_logger().info('Published initial joint state (all zeros)')
+
+        self.get_logger().info(f'Published initial joint state from hardware:')
+        self.get_logger().info(f'  Right arm: {[f"{p:.3f}" for p in right_positions]}')
+        self.get_logger().info(f'  Left arm: {[f"{p:.3f}" for p in left_positions]}')
 
     def get_motor_states(self):
         """Read current positions and velocities from motors"""
@@ -307,6 +347,48 @@ class GestureExecutorHardware(Node):
 
         # Send current commands
         self.send_current_commands(currents)
+
+    def visualization_callback(self):
+        """Publish current joint states for RViz visualization (10 Hz)"""
+        # Only publish if not executing (during execution, execute_single_trajectory handles it)
+        if self.control_active:
+            return
+
+        # Read current motor positions
+        self.get_motor_states()
+
+        # Map motor positions to joint positions
+        right_positions = []
+        left_positions = []
+
+        for i in range(4):
+            # Right arm
+            right_motor_id = self.right_motor_ids[i]
+            if right_motor_id in self.motor_ids:
+                idx = self.motor_ids.index(right_motor_id)
+                right_positions.append(self.current_positions[idx])
+            else:
+                right_positions.append(0.0)
+
+            # Left arm
+            left_motor_id = self.left_motor_ids[i]
+            if left_motor_id in self.motor_ids:
+                idx = self.motor_ids.index(left_motor_id)
+                left_positions.append(self.current_positions[idx])
+            else:
+                left_positions.append(0.0)
+
+        # Create and publish joint state
+        joint_msg = JointState()
+        joint_msg.header.stamp = self.get_clock().now().to_msg()
+        joint_msg.name = [
+            'right_joint_0', 'right_joint_1', 'right_joint_2', 'right_joint_3',
+            'left_joint_0', 'left_joint_1', 'left_joint_2', 'left_joint_3'
+        ]
+        joint_msg.position = right_positions + left_positions
+
+        self.last_joint_state = joint_msg
+        self.joint_pub.publish(joint_msg)
 
     def goal_callback(self, goal_request):
         """Accept or reject a client request to begin an action"""
