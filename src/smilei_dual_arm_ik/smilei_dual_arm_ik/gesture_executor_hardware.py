@@ -84,11 +84,11 @@ class GestureExecutorHardware(Node):
 
         self.get_logger().info(f'Detected motors: {self.motor_ids}')
 
-        # Motor IDs mapping (assuming standard dual arm configuration)
-        # Right arm: motors 5,6,7,8 (IDs from hardware)
-        # Left arm: motors 1,2,3,4 (IDs from hardware)
-        self.right_motor_ids = [5, 6, 7, 8]
-        self.left_motor_ids = [1, 2, 3, 4]
+        # Motor IDs mapping (corrected based on actual hardware)
+        # Right arm: motors 1,2,3,4 (IDs from hardware)
+        # Left arm: motors 5,6,7,8 (IDs from hardware)
+        self.right_motor_ids = [1, 2, 3, 4]
+        self.left_motor_ids = [5, 6, 7, 8]
 
         # Initialize IK solver and trajectory planner
         self.ik_solver = InverseKinematicsDualArm(robot_params_file)
