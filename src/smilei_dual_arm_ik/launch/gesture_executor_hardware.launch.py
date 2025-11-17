@@ -32,6 +32,7 @@ def launch_setup(context, *args, **kwargs):
     # Paths to files
     xacro_file = os.path.join(pkg_share, 'urdf', 'dual_arm_parametric.urdf.xacro')
     robot_params_file = os.path.join(pkg_share, 'config', 'robot_parameters.yaml')
+    executor_params_file = os.path.join(pkg_share, 'config', 'gesture_executor_params.yaml')
     gestures_directory = os.path.join(pkg_share, 'config', 'gestures')
     rviz_config_file = os.path.join(pkg_share, 'rviz', 'dual_arm.rviz')
 
@@ -69,14 +70,17 @@ def launch_setup(context, *args, **kwargs):
         executable='gesture_executor_hardware.py',
         name='gesture_executor_hardware',
         output='screen',
-        parameters=[{
-            'gestures_directory': gestures_directory,
-            'robot_params_file': robot_params_file,
-            'hardware_manager.usb_ports': usb_ports,
-            'hardware_manager.baudrate': baudrate,
-            'hardware_manager.auto_detect': True,
-            'hardware_manager.debug': False,
-        }]
+        parameters=[
+            executor_params_file,  # Load all executor parameters from YAML
+            {
+                'gestures_directory': gestures_directory,
+                'robot_params_file': robot_params_file,
+                'hardware_manager.usb_ports': usb_ports,
+                'hardware_manager.baudrate': baudrate,
+                'hardware_manager.auto_detect': True,
+                'hardware_manager.debug': False,
+            }
+        ]
     )
 
     # RViz Node (optional)

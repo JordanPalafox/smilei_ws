@@ -47,6 +47,41 @@ class GestureExecutorHardware(Node):
         self.declare_parameter('hardware_manager.auto_detect', True)
         self.declare_parameter('hardware_manager.debug', False)
 
+        # Declare control loop frequency parameters
+        self.declare_parameter('control_loop_frequency', 1000.0)
+        self.declare_parameter('visualization_frequency', 10.0)
+
+        # Declare PD control parameters
+        self.declare_parameter('pd_control.kp', 1.0)
+        self.declare_parameter('pd_control.kp_motor7', 0.5)
+        self.declare_parameter('pd_control.kd', 0.1)
+        self.declare_parameter('pd_control.r1', 0.4)
+        self.declare_parameter('pd_control.r2', 0.3)
+
+        # Declare velocity estimator parameters
+        self.declare_parameter('velocity_estimator.Fc', 35.0)
+
+        # Declare safety parameters
+        self.declare_parameter('safety.max_current', 5.0)
+        self.declare_parameter('safety.Kt', 0.35)
+
+        # Declare convergence control parameters
+        self.declare_parameter('convergence.threshold', 0.12)
+        self.declare_parameter('convergence.max_wait_time', 0.8)
+        self.declare_parameter('convergence.check_interval', 0.01)
+        self.declare_parameter('convergence.min_progress_checks', 5)
+        self.declare_parameter('convergence.stall_threshold', 0.010)
+
+        # Declare motor configuration parameters
+        self.declare_parameter('motors.right_arm_ids', [1, 2, 3, 4])
+        self.declare_parameter('motors.left_arm_ids', [5, 6, 7, 8])
+        self.declare_parameter('motors.current_control_pid.p_gain_iq', 0.277)
+        self.declare_parameter('motors.current_control_pid.i_gain_iq', 0.061)
+        self.declare_parameter('motors.current_control_pid.d_gain_iq', 0.0)
+        self.declare_parameter('motors.current_control_pid.p_gain_id', 0.277)
+        self.declare_parameter('motors.current_control_pid.i_gain_id', 0.061)
+        self.declare_parameter('motors.current_control_pid.d_gain_id', 0.0)
+
         # Load parameters
         robot_params_file = self.get_parameter('robot_params_file').value
         if not robot_params_file:
@@ -84,11 +119,10 @@ class GestureExecutorHardware(Node):
 
         self.get_logger().info(f'Detected motors: {self.motor_ids}')
 
-        # Motor IDs mapping (corrected based on actual hardware)
-        # Right arm: motors 1,2,3,4 (IDs from hardware)
-        # Left arm: motors 5,6,7,8 (IDs from hardware)
-        self.right_motor_ids = [1, 2, 3, 4]
-        self.left_motor_ids = [5, 6, 7, 8]
+        # Motor IDs mapping (from parameters)
+        self.right_motor_ids = self.get_parameter('motors.right_arm_ids').value
+        self.left_motor_ids = self.get_parameter('motors.left_arm_ids').value
+        self.get_logger().info(f'Motor mapping - Right: {self.right_motor_ids}, Left: {self.left_motor_ids}')
 
         # Initialize IK solver and trajectory planner
         self.ik_solver = InverseKinematicsDualArm(robot_params_file)
@@ -108,24 +142,25 @@ class GestureExecutorHardware(Node):
             10
         )
 
-        # PD Control Parameters (from remote_teleoperation.py)
-        self.kp = 1.0        # Proportional gain
-        self.kp_motor7 = 0.5  # Specific for motor 7
-        self.kd = 0.1        # Damping gain
+        # PD Control Parameters (from config file)
+        self.kp = self.get_parameter('pd_control.kp').value
+        self.kp_motor7 = self.get_parameter('pd_control.kp_motor7').value
+        self.kd = self.get_parameter('pd_control.kd').value
 
         # Non-linear PD parameters
-        self.r1 = 0.4
-        self.r2 = 0.3
+        self.r1 = self.get_parameter('pd_control.r1').value
+        self.r2 = self.get_parameter('pd_control.r2').value
         self.p1 = (2*self.r2 - self.r1) / self.r1
         self.p2 = (2*self.r2 - self.r1) / self.r2
 
         # Velocity estimator parameters
-        self.Fc = 35         # Frequency cutoff
-        self.Tl = 0.001      # Loop frequency (1000 Hz = 1ms)
+        self.Fc = self.get_parameter('velocity_estimator.Fc').value
+        control_loop_freq = self.get_parameter('control_loop_frequency').value
+        self.Tl = 1.0 / control_loop_freq  # Loop period (automatically calculated)
 
         # Safety limits
-        self.max_current = 5.0              # Maximum current (A)
-        self.Kt = 0.35                      # Torque constant
+        self.max_current = self.get_parameter('safety.max_current').value
+        self.Kt = self.get_parameter('safety.Kt').value
 
         # Motor state variables
         self.current_positions = [0.0] * 8
@@ -143,11 +178,19 @@ class GestureExecutorHardware(Node):
         # Counter for periodic tasks
         self.loop_counter = 0
 
-        # Single unified timer for ALL hardware access (1000 Hz - MAXIMUM FREQUENCY)
+        # Get frequencies from parameters
+        control_freq = self.get_parameter('control_loop_frequency').value
+        viz_freq = self.get_parameter('visualization_frequency').value
+
+        # Calculate visualization divider (how many control cycles per viz update)
+        self.viz_divider = int(control_freq / viz_freq)
+
+        # Single unified timer for ALL hardware access
         # This ensures sequential access to USB ports, avoiding conflicts
         # Higher frequency = smoother control and faster response
+        timer_period = 1.0 / control_freq
         self.hardware_timer = self.create_timer(
-            0.001,  # 1000 Hz (1ms) - All hardware I/O happens here sequentially
+            timer_period,
             self.hardware_loop_callback
         )
 
@@ -173,8 +216,11 @@ class GestureExecutorHardware(Node):
         self.get_logger().info(f'  Gestures directory: {self.gestures_directory}')
         self.get_logger().info(f'  Robot params: {robot_params_file}')
         self.get_logger().info(f'  Motors: {self.motor_ids}')
-        self.get_logger().info(f'  Control loop frequency: 1000 Hz (1ms)')
-        self.get_logger().info(f'  Visualization frequency: 10 Hz (100ms)')
+        self.get_logger().info(f'  Control loop frequency: {control_freq} Hz ({timer_period*1000:.2f}ms)')
+        self.get_logger().info(f'  Visualization frequency: {viz_freq} Hz')
+        self.get_logger().info(f'  PD gains: kp={self.kp}, kd={self.kd}')
+        self.get_logger().info(f'  Convergence: threshold={self.get_parameter("convergence.threshold").value:.3f}rad, '
+                              f'max_wait={self.get_parameter("convergence.max_wait_time").value}s')
 
     def setup_motors(self):
         """Configure motors for current control mode"""
@@ -185,14 +231,22 @@ class GestureExecutorHardware(Node):
 
             self.get_logger().info('Configuring motors for current control...')
 
-            # Configure PID gains for current control (from remote_teleoperation.py)
+            # Get PID gains from parameters
+            p_gain_iq = self.get_parameter('motors.current_control_pid.p_gain_iq').value
+            i_gain_iq = self.get_parameter('motors.current_control_pid.i_gain_iq').value
+            d_gain_iq = self.get_parameter('motors.current_control_pid.d_gain_iq').value
+            p_gain_id = self.get_parameter('motors.current_control_pid.p_gain_id').value
+            i_gain_id = self.get_parameter('motors.current_control_pid.i_gain_id').value
+            d_gain_id = self.get_parameter('motors.current_control_pid.d_gain_id').value
+
+            # Configure PID gains for current control (from config file)
             for motor_id in self.motor_ids:
-                self.hardware_manager.set_p_gain_iq((motor_id, 0.277))
-                self.hardware_manager.set_i_gain_iq((motor_id, 0.061))
-                self.hardware_manager.set_d_gain_iq((motor_id, 0))
-                self.hardware_manager.set_p_gain_id((motor_id, 0.277))
-                self.hardware_manager.set_i_gain_id((motor_id, 0.061))
-                self.hardware_manager.set_d_gain_id((motor_id, 0))
+                self.hardware_manager.set_p_gain_iq((motor_id, p_gain_iq))
+                self.hardware_manager.set_i_gain_iq((motor_id, i_gain_iq))
+                self.hardware_manager.set_d_gain_iq((motor_id, d_gain_iq))
+                self.hardware_manager.set_p_gain_id((motor_id, p_gain_id))
+                self.hardware_manager.set_i_gain_id((motor_id, i_gain_id))
+                self.hardware_manager.set_d_gain_id((motor_id, d_gain_id))
 
                 # Set current control mode (mode 0)
                 self.hardware_manager.set_mode((motor_id, 0))
@@ -337,7 +391,7 @@ class GestureExecutorHardware(Node):
 
     def hardware_loop_callback(self):
         """
-        Unified hardware loop (1000 Hz) - ALL hardware I/O happens here sequentially
+        Unified hardware loop - ALL hardware I/O happens here sequentially
         This ensures ordered access to USB ports, avoiding concurrent access conflicts
         High frequency control for maximum smoothness and responsiveness
         """
@@ -352,8 +406,8 @@ class GestureExecutorHardware(Node):
             currents = self.calculate_control_currents()
             self.send_current_commands(currents)
 
-        # STEP 3: Publish visualization (every 100 cycles = 10 Hz when loop is 1000 Hz)
-        if self.loop_counter % 100 == 0:
+        # STEP 3: Publish visualization (at visualization frequency)
+        if self.loop_counter % self.viz_divider == 0:
             self.publish_joint_state_for_visualization()
 
     def publish_joint_state_for_visualization(self):
@@ -545,7 +599,7 @@ class GestureExecutorHardware(Node):
             # Extract execution parameters
             synchronized = config.get('synchronized', True)
             interpolation_method = config.get('interpolation_method', 'cubic')
-            steps_per_segment = config.get('steps_per_segment', 50)
+            steps_per_segment = config.get('steps_per_segment', 20)
 
             self.get_logger().info(
                 f'Loaded gesture "{gesture_name}": '
@@ -751,12 +805,12 @@ class GestureExecutorHardware(Node):
         if total_points == 0:
             return True
 
-        # Progressive convergence parameters - advance when motor is MOVING TOWARDS target
-        convergence_threshold = 0.08  # radians (~4.6 degrees) - looser threshold for better flow
-        max_wait_time = 0.5  # seconds - maximum wait per waypoint (reduced for smoother motion)
-        check_interval = 0.01  # seconds - how often to check progress
-        min_progress_checks = 3  # number of checks before evaluating progress
-        stall_threshold = 0.005  # rad - if error doesn't decrease by this much, consider stalled
+        # Progressive convergence parameters - from config file
+        convergence_threshold = self.get_parameter('convergence.threshold').value
+        max_wait_time = self.get_parameter('convergence.max_wait_time').value
+        check_interval = self.get_parameter('convergence.check_interval').value
+        min_progress_checks = self.get_parameter('convergence.min_progress_checks').value
+        stall_threshold = self.get_parameter('convergence.stall_threshold').value
 
         self.get_logger().info(
             f'Executing with progressive convergence control: '
