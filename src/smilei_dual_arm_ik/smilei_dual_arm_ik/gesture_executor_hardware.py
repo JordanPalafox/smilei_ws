@@ -121,7 +121,7 @@ class GestureExecutorHardware(Node):
 
         # Velocity estimator parameters
         self.Fc = 35         # Frequency cutoff
-        self.Tl = 0.002      # Loop frequency
+        self.Tl = 0.001      # Loop frequency (1000 Hz = 1ms)
 
         # Safety limits
         self.max_current = 5.0              # Maximum current (A)
@@ -143,10 +143,11 @@ class GestureExecutorHardware(Node):
         # Counter for periodic tasks
         self.loop_counter = 0
 
-        # Single unified timer for ALL hardware access (500 Hz)
+        # Single unified timer for ALL hardware access (1000 Hz - MAXIMUM FREQUENCY)
         # This ensures sequential access to USB ports, avoiding conflicts
+        # Higher frequency = smoother control and faster response
         self.hardware_timer = self.create_timer(
-            0.002,  # 500 Hz (2ms) - All hardware I/O happens here sequentially
+            0.001,  # 1000 Hz (1ms) - All hardware I/O happens here sequentially
             self.hardware_loop_callback
         )
 
@@ -172,6 +173,8 @@ class GestureExecutorHardware(Node):
         self.get_logger().info(f'  Gestures directory: {self.gestures_directory}')
         self.get_logger().info(f'  Robot params: {robot_params_file}')
         self.get_logger().info(f'  Motors: {self.motor_ids}')
+        self.get_logger().info(f'  Control loop frequency: 1000 Hz (1ms)')
+        self.get_logger().info(f'  Visualization frequency: 10 Hz (100ms)')
 
     def setup_motors(self):
         """Configure motors for current control mode"""
@@ -334,8 +337,9 @@ class GestureExecutorHardware(Node):
 
     def hardware_loop_callback(self):
         """
-        Unified hardware loop (500 Hz) - ALL hardware I/O happens here sequentially
+        Unified hardware loop (1000 Hz) - ALL hardware I/O happens here sequentially
         This ensures ordered access to USB ports, avoiding concurrent access conflicts
+        High frequency control for maximum smoothness and responsiveness
         """
         # Increment loop counter
         self.loop_counter += 1
@@ -348,8 +352,8 @@ class GestureExecutorHardware(Node):
             currents = self.calculate_control_currents()
             self.send_current_commands(currents)
 
-        # STEP 3: Publish visualization (every 50 cycles = 10 Hz when loop is 500 Hz)
-        if self.loop_counter % 50 == 0:
+        # STEP 3: Publish visualization (every 100 cycles = 10 Hz when loop is 1000 Hz)
+        if self.loop_counter % 100 == 0:
             self.publish_joint_state_for_visualization()
 
     def publish_joint_state_for_visualization(self):
