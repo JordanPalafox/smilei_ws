@@ -140,16 +140,14 @@ class GestureExecutorHardware(Node):
         self.last_joint_state = None
         self.control_active = False
 
-        # Timer for maintaining control loop (1000 Hz = 1 kHz for ultra-smooth control)
-        self.control_timer = self.create_timer(
-            0.001,  # 1000 Hz (1ms) - Very high frequency for precise control
-            self.control_loop_callback
-        )
+        # Counter for periodic tasks
+        self.loop_counter = 0
 
-        # Timer for publishing joint states for visualization (10 Hz)
-        self.viz_timer = self.create_timer(
-            0.1,  # 10 Hz
-            self.visualization_callback
+        # Single unified timer for ALL hardware access (500 Hz)
+        # This ensures sequential access to USB ports, avoiding conflicts
+        self.hardware_timer = self.create_timer(
+            0.002,  # 500 Hz (2ms) - All hardware I/O happens here sequentially
+            self.hardware_loop_callback
         )
 
         # Setup motors
@@ -334,29 +332,28 @@ class GestureExecutorHardware(Node):
             self.get_logger().error(f'Error sending currents: {e}')
             return False
 
-    def control_loop_callback(self):
-        """High-frequency control loop (100 Hz)"""
-        if not self.control_active:
-            return
+    def hardware_loop_callback(self):
+        """
+        Unified hardware loop (500 Hz) - ALL hardware I/O happens here sequentially
+        This ensures ordered access to USB ports, avoiding concurrent access conflicts
+        """
+        # Increment loop counter
+        self.loop_counter += 1
 
-        # Read motor states
+        # STEP 1: Read motor states (ALWAYS - needed for both control and visualization)
         self.get_motor_states()
 
-        # Calculate control currents
-        currents = self.calculate_control_currents()
-
-        # Send current commands
-        self.send_current_commands(currents)
-
-    def visualization_callback(self):
-        """Publish current joint states for RViz visualization (10 Hz)"""
-        # Only publish if not executing (during execution, execute_single_trajectory handles it)
+        # STEP 2: Calculate and send control currents (if control is active)
         if self.control_active:
-            return
+            currents = self.calculate_control_currents()
+            self.send_current_commands(currents)
 
-        # Read current motor positions
-        self.get_motor_states()
+        # STEP 3: Publish visualization (every 50 cycles = 10 Hz when loop is 500 Hz)
+        if self.loop_counter % 50 == 0:
+            self.publish_joint_state_for_visualization()
 
+    def publish_joint_state_for_visualization(self):
+        """Publish current joint states for RViz (uses already-read motor positions)"""
         # Map motor positions to joint positions
         right_positions = []
         left_positions = []
@@ -638,9 +635,8 @@ class GestureExecutorHardware(Node):
         current_right_angles = np.zeros(4)
         current_left_angles = np.zeros(4)
 
-        # Read from hardware
-        self.get_logger().info('Reading current motor states...')
-        self.get_motor_states()
+        # Use positions already read by hardware loop (NO redundant USB access)
+        self.get_logger().info('Using current motor states from hardware loop...')
         self.get_logger().info(f'Current motor positions: {self.current_positions}')
 
         # Map motor positions to arm joint angles
