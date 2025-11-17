@@ -751,14 +751,17 @@ class GestureExecutorHardware(Node):
         if total_points == 0:
             return True
 
-        # Convergence parameters - WAIT until motor reaches waypoint
-        convergence_threshold = 0.05  # radians (~3 degrees) - how close is "close enough"
-        max_wait_time = 1.0  # seconds - maximum wait time per waypoint
-        check_interval = 0.01  # seconds - how often to check convergence
+        # Progressive convergence parameters - advance when motor is MOVING TOWARDS target
+        convergence_threshold = 0.08  # radians (~4.6 degrees) - looser threshold for better flow
+        max_wait_time = 0.5  # seconds - maximum wait per waypoint (reduced for smoother motion)
+        check_interval = 0.01  # seconds - how often to check progress
+        min_progress_checks = 3  # number of checks before evaluating progress
+        stall_threshold = 0.005  # rad - if error doesn't decrease by this much, consider stalled
 
         self.get_logger().info(
-            f'Executing with convergence control: '
-            f'threshold={convergence_threshold:.3f}rad, max_wait={max_wait_time}s'
+            f'Executing with progressive convergence control: '
+            f'threshold={convergence_threshold:.3f}rad, max_wait={max_wait_time}s, '
+            f'stall_threshold={stall_threshold:.3f}rad'
         )
 
         for i in range(total_points):
@@ -789,9 +792,11 @@ class GestureExecutorHardware(Node):
                     idx = self.motor_ids.index(left_motor_id)
                     self.target_positions[idx] = left_angles[j]
 
-            # WAIT until motors reach close to target (or timeout)
+            # WAIT until motors are progressing towards target or reach it
             start_wait = time.time()
             converged = False
+            check_count = 0
+            error_history = []  # Track error over time to detect progress
 
             while not converged and (time.time() - start_wait) < max_wait_time:
                 # Check if goal is cancelled during wait
@@ -800,7 +805,7 @@ class GestureExecutorHardware(Node):
                     goal_handle.canceled()
                     return False
 
-                # Check convergence - compare current vs target for all motors
+                # Calculate current max error across all motors
                 max_error = 0.0
                 for j in range(4):
                     # Right arm
@@ -817,25 +822,56 @@ class GestureExecutorHardware(Node):
                         error = abs(self.current_positions[idx] - self.target_positions[idx])
                         max_error = max(max_error, error)
 
-                # Check if all motors are within threshold
+                # Store error for progress analysis
+                error_history.append(max_error)
+                check_count += 1
+
+                # Check if converged (reached threshold)
                 if max_error < convergence_threshold:
                     converged = True
-                else:
-                    time.sleep(check_interval)
+                    break
+
+                # After minimum checks, evaluate progress
+                if check_count >= min_progress_checks:
+                    # Check if error is decreasing (motor moving towards target)
+                    initial_error = error_history[0]
+                    recent_error = error_history[-1]
+                    error_reduction = initial_error - recent_error
+
+                    # If motor has made reasonable progress, advance
+                    # This allows smooth motion even without perfect convergence
+                    if error_reduction > stall_threshold:
+                        # Motor is progressing well, advance to next waypoint
+                        converged = True
+                        break
+
+                time.sleep(check_interval)
 
             # Log convergence status
             elapsed = time.time() - start_wait
-            if converged:
+            final_error = error_history[-1] if error_history else 0.0
+
+            if converged and final_error < convergence_threshold:
+                # Perfect convergence
                 if i % 10 == 0:
                     self.get_logger().info(
                         f'Waypoint {i}/{total_points}: Converged in {elapsed:.3f}s '
-                        f'(max_error < {convergence_threshold:.3f}rad)'
+                        f'(error={final_error:.3f}rad)'
+                    )
+            elif converged:
+                # Progressing well
+                if i % 10 == 0:
+                    self.get_logger().info(
+                        f'Waypoint {i}/{total_points}: Progressing in {elapsed:.3f}s '
+                        f'(error={final_error:.3f}rad, reducing)'
                     )
             else:
-                self.get_logger().warning(
-                    f'Waypoint {i}/{total_points}: Timeout after {elapsed:.3f}s '
-                    f'(did not fully converge)'
-                )
+                # Timeout or stalled
+                if i % 10 == 0:
+                    self.get_logger().warning(
+                        f'Waypoint {i}/{total_points}: Advanced after {elapsed:.3f}s '
+                        f'(error={final_error:.3f}rad)'
+                    )
 
             # Publish joint state for visualization
             joint_msg = JointState()
