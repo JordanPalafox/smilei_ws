@@ -1,0 +1,110 @@
+# Gesture Executor Hardware Parameters
+# Configuration file for gesture execution with real BEAR motors
+
+gesture_executor_hardware:
+  ros__parameters:
+    # ==============================================================================
+    # CONTROL LOOP FREQUENCIES
+    # ==============================================================================
+    control_loop_frequency: 1000.0  # Hz - Main hardware control loop (1000 Hz = 1ms)
+    visualization_frequency: 10.0   # Hz - RViz visualization update rate
+
+    # ==============================================================================
+    # PD CONTROL PARAMETERS
+    # ==============================================================================
+    # Proportional-Derivative control gains
+    pd_control:
+      kp: 1.0              # Proportional gain (general)
+      kp_motor7: 0.5       # Specific proportional gain for motor 7
+      kd: 0.1              # Damping/derivative gain
+
+      # Non-linear PD parameters
+      r1: 0.4              # Non-linear parameter 1
+      r2: 0.3              # Non-linear parameter 2
+      # p1 and p2 are calculated from r1 and r2
+
+    # ==============================================================================
+    # VELOCITY ESTIMATOR PARAMETERS
+    # ==============================================================================
+    velocity_estimator:
+      Fc: 35.0             # Frequency cutoff for low-pass filter
+      # Tl is calculated from control_loop_frequency (1/freq)
+
+    # ==============================================================================
+    # SAFETY LIMITS
+    # ==============================================================================
+    safety:
+      max_current: 5.0     # Maximum current in Amperes
+      Kt: 0.35             # Torque constant (Nm/A)
+
+    # ==============================================================================
+    # CONVERGENCE CONTROL PARAMETERS
+    # ==============================================================================
+    # These parameters control how the system decides to advance to the next waypoint
+    convergence:
+      # Convergence threshold - how close the motor needs to be to the target
+      # Larger values = more lenient, faster execution, less precise
+      # Smaller values = more strict, slower execution, more precise
+      threshold: 0.12      # radians (~6.9 degrees)
+                           # Recommended: 0.08-0.15 depending on precision needs
+
+      # Maximum wait time per waypoint before forcing advance
+      # Larger values = more time for motors to reach position
+      # Smaller values = faster execution, may skip positions
+      max_wait_time: 0.8   # seconds
+                           # Recommended: 0.5-1.0 depending on steps_per_segment
+
+      # How often to check convergence status
+      check_interval: 0.01 # seconds (10ms)
+
+      # Minimum number of checks before evaluating progress
+      # This prevents premature advancement
+      min_progress_checks: 5  # checks (at 10ms = 50ms total)
+
+      # Stall threshold - minimum error reduction to consider "progressing"
+      # If error reduces by at least this much, motor is making progress
+      stall_threshold: 0.010  # radians (~0.57 degrees)
+                              # Recommended: 0.005-0.015
+
+    # ==============================================================================
+    # MOTOR CONFIGURATION
+    # ==============================================================================
+    motors:
+      # Motor ID mapping (based on actual hardware)
+      right_arm_ids: [1, 2, 3, 4]  # Right arm motor IDs
+      left_arm_ids: [5, 6, 7, 8]   # Left arm motor IDs
+
+      # Motor PID gains for current control (from remote_teleoperation.py)
+      current_control_pid:
+        p_gain_iq: 0.277
+        i_gain_iq: 0.061
+        d_gain_iq: 0.0
+        p_gain_id: 0.277
+        i_gain_id: 0.061
+        d_gain_id: 0.0
+
+# ==============================================================================
+# PARAMETER TUNING GUIDE
+# ==============================================================================
+#
+# For FASTER execution with LESS PRECISION:
+#   - Increase convergence.threshold (0.15-0.20)
+#   - Decrease convergence.max_wait_time (0.3-0.5)
+#   - Increase convergence.stall_threshold (0.015-0.020)
+#
+# For SLOWER execution with MORE PRECISION:
+#   - Decrease convergence.threshold (0.05-0.08)
+#   - Increase convergence.max_wait_time (1.0-1.5)
+#   - Decrease convergence.stall_threshold (0.003-0.008)
+#
+# For trajectories with FEWER waypoints (steps_per_segment = 10-20):
+#   - Increase convergence.threshold (0.12-0.15)
+#   - Increase convergence.max_wait_time (0.8-1.0)
+#   - Increase convergence.stall_threshold (0.010-0.015)
+#
+# For trajectories with MORE waypoints (steps_per_segment = 50-100):
+#   - Decrease convergence.threshold (0.06-0.10)
+#   - Decrease convergence.max_wait_time (0.3-0.5)
+#   - Decrease convergence.stall_threshold (0.005-0.008)
+#
+# ==============================================================================
