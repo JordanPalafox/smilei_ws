@@ -747,8 +747,15 @@ class GestureExecutorHardware(Node):
         if total_points == 0:
             return True
 
-        execution_rate = 100.0  # Hz - High frequency setpoint updates
-        sleep_time = 1.0 / execution_rate
+        # Convergence parameters - WAIT until motor reaches waypoint
+        convergence_threshold = 0.05  # radians (~3 degrees) - how close is "close enough"
+        max_wait_time = 1.0  # seconds - maximum wait time per waypoint
+        check_interval = 0.01  # seconds - how often to check convergence
+
+        self.get_logger().info(
+            f'Executing with convergence control: '
+            f'threshold={convergence_threshold:.3f}rad, max_wait={max_wait_time}s'
+        )
 
         for i in range(total_points):
             # Check if goal is cancelled
@@ -778,6 +785,54 @@ class GestureExecutorHardware(Node):
                     idx = self.motor_ids.index(left_motor_id)
                     self.target_positions[idx] = left_angles[j]
 
+            # WAIT until motors reach close to target (or timeout)
+            start_wait = time.time()
+            converged = False
+
+            while not converged and (time.time() - start_wait) < max_wait_time:
+                # Check if goal is cancelled during wait
+                if goal_handle.is_cancel_requested:
+                    self.get_logger().info('Goal cancelled during convergence wait')
+                    goal_handle.canceled()
+                    return False
+
+                # Check convergence - compare current vs target for all motors
+                max_error = 0.0
+                for j in range(4):
+                    # Right arm
+                    right_motor_id = self.right_motor_ids[j]
+                    if right_motor_id in self.motor_ids:
+                        idx = self.motor_ids.index(right_motor_id)
+                        error = abs(self.current_positions[idx] - self.target_positions[idx])
+                        max_error = max(max_error, error)
+
+                    # Left arm
+                    left_motor_id = self.left_motor_ids[j]
+                    if left_motor_id in self.motor_ids:
+                        idx = self.motor_ids.index(left_motor_id)
+                        error = abs(self.current_positions[idx] - self.target_positions[idx])
+                        max_error = max(max_error, error)
+
+                # Check if all motors are within threshold
+                if max_error < convergence_threshold:
+                    converged = True
+                else:
+                    time.sleep(check_interval)
+
+            # Log convergence status
+            elapsed = time.time() - start_wait
+            if converged:
+                if i % 10 == 0:
+                    self.get_logger().info(
+                        f'Waypoint {i}/{total_points}: Converged in {elapsed:.3f}s '
+                        f'(max_error < {convergence_threshold:.3f}rad)'
+                    )
+            else:
+                self.get_logger().warning(
+                    f'Waypoint {i}/{total_points}: Timeout after {elapsed:.3f}s '
+                    f'(did not fully converge)'
+                )
+
             # Publish joint state for visualization
             joint_msg = JointState()
             joint_msg.header.stamp = self.get_clock().now().to_msg()
@@ -798,13 +853,9 @@ class GestureExecutorHardware(Node):
 
             if i % 10 == 0:
                 goal_handle.publish_feedback(feedback_msg)
-                self.get_logger().info(
-                    f'Progress: {progress*100:.1f}% ({i}/{total_points})'
-                )
 
-            # Sleep to maintain execution rate
-            # Control loop callback handles the actual motor commands
-            time.sleep(sleep_time)
+            # Note: No sleep needed here - convergence wait already handled timing
+            # The trajectory advances as fast as the motors can physically move
 
         return True
 
