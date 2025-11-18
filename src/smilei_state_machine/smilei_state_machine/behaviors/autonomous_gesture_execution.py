@@ -274,13 +274,28 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
         """Load gesture configuration from YAML file"""
         gesture_file = os.path.join(self.gestures_directory, f'{gesture_name}.yaml')
 
+        # DEBUG: Log file path details
+        self.node.get_logger().info(f'🔍 DEBUG: Gestures directory: {self.gestures_directory}')
+        self.node.get_logger().info(f'🔍 DEBUG: Loading gesture from: {gesture_file}')
+        self.node.get_logger().info(f'🔍 DEBUG: File exists: {os.path.exists(gesture_file)}')
+
         if not os.path.exists(gesture_file):
             self.node.get_logger().error(f'Gesture file not found: {gesture_file}')
             return None
 
         try:
             with open(gesture_file, 'r') as f:
+                # DEBUG: Log raw file content
+                raw_content = f.read()
+                self.node.get_logger().info(f'🔍 DEBUG: Raw YAML content:\n{raw_content}')
+
+                # Parse YAML
+                f.seek(0)  # Reset file pointer to beginning
                 config = yaml.safe_load(f)
+
+                # DEBUG: Log parsed config
+                self.node.get_logger().info(f'🔍 DEBUG: Parsed config: {config}')
+
             self.node.get_logger().info(f'✅ Loaded gesture: {gesture_name}')
             return config
         except Exception as e:
