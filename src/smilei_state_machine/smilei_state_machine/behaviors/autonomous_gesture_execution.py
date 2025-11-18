@@ -149,14 +149,19 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
     def gesture_command_callback(self, msg):
         """Callback for receiving gesture commands via topic"""
         self.node.get_logger().info(f'📨 Received gesture command: {msg.data}')
+
+        # Always save to pending_gesture
         self.pending_gesture = msg.data
 
-        # Reset state to trigger re-initialization
-        self.gesture_name = msg.data
-        self.execution_started = False
-        self.execution_complete = False
-        self.execution_success = False
-        self.running = True
+        # Only execute immediately if behavior is currently active (running)
+        if self.running:
+            self.node.get_logger().info(f'⚡ Behavior active - executing gesture immediately')
+            self.gesture_name = msg.data
+            self.execution_started = False
+            self.execution_complete = False
+            self.execution_success = False
+        else:
+            self.node.get_logger().info(f'💤 Behavior inactive - gesture queued for when state activates')
 
     def initialise(self) -> None:
         """Called when behavior is activated"""
@@ -399,6 +404,9 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
         # Publish idle status
         self.publish_status("idle", False)
 
+        # Clear all state to prevent executing old gestures on next activation
+        self.pending_gesture = None
+        self.gesture_name = None
         self.running = False
 
         # Only destroy node if we created it
