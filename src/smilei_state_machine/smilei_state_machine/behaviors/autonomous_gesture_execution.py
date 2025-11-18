@@ -12,7 +12,7 @@ import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from std_msgs.msg import String, Bool
-from smilei_dual_arm_ik_interfaces.action import ExecuteGesture
+from smilei_dual_arm_ik.action import ExecuteGesture
 
 
 class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
@@ -413,6 +413,6 @@ TOPICS SUBSCRIBED:
   Example: ros2 topic pub /gesture_command std_msgs/msg/String "{data: 'heart'}"
 
 ACTION SERVER REQUIRED:
-- /execute_gesture (smilei_dual_arm_ik_interfaces/action/ExecuteGesture)
+- /execute_gesture (smilei_dual_arm_ik/action/ExecuteGesture)
   Provided by: ros2 launch smilei_dual_arm_ik gesture_executor_hardware.launch.py
 """
