@@ -73,6 +73,9 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
         self.execution_success = False
         self.running = False
 
+        # Behavior activation state (separate from gesture execution state)
+        self.is_active = False  # True when behavior is in active state, False otherwise
+
         # Motor state for control
         self.current_positions = [0.0] * 8
         self.target_positions = [0.0] * 8
@@ -150,21 +153,22 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
         """Callback for receiving gesture commands via topic"""
         self.node.get_logger().info(f'📨 Received gesture command: {msg.data}')
 
-        # Always save to pending_gesture
-        self.pending_gesture = msg.data
-
-        # Only execute immediately if behavior is currently active (running)
-        if self.running:
+        # Only process gestures if behavior is in active state
+        if self.is_active:
             self.node.get_logger().info(f'⚡ Behavior active - executing gesture immediately')
             self.gesture_name = msg.data
             self.execution_started = False
             self.execution_complete = False
             self.execution_success = False
+            self.running = True
         else:
-            self.node.get_logger().info(f'💤 Behavior inactive - gesture queued for when state activates')
+            self.node.get_logger().info(f'💤 Behavior inactive - gesture ignored')
 
     def initialise(self) -> None:
         """Called when behavior is activated"""
+        # Mark behavior as active (can now receive gesture commands)
+        self.is_active = True
+
         # Use pending gesture if available
         if self.pending_gesture:
             self.gesture_name = self.pending_gesture
@@ -408,6 +412,7 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
         self.pending_gesture = None
         self.gesture_name = None
         self.running = False
+        self.is_active = False  # Mark behavior as inactive
 
         # Only destroy node if we created it
         if self.own_node and self.node:
