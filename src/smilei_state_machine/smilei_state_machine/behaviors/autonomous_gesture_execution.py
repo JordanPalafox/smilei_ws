@@ -151,6 +151,13 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
         self.node.get_logger().info(f'📨 Received gesture command: {msg.data}')
         self.pending_gesture = msg.data
 
+        # Reset state to trigger re-initialization
+        self.gesture_name = msg.data
+        self.execution_started = False
+        self.execution_complete = False
+        self.execution_success = False
+        self.running = True
+
     def initialise(self) -> None:
         """Called when behavior is activated"""
         # Use pending gesture if available
@@ -180,7 +187,7 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
         # Check if we have a gesture to execute
         if not self.gesture_name or not self.running:
             self.publish_status("idle", False)
-            return py_trees.common.Status.SUCCESS
+            return py_trees.common.Status.RUNNING  # Stay active waiting for commands
 
         # Start execution if not started
         if not self.execution_started:
@@ -190,14 +197,20 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
         if not self.execution_complete:
             return py_trees.common.Status.RUNNING
 
-        # Execution complete - return result
+        # Execution complete - return result and reset for next gesture
         if self.execution_success:
             self.node.get_logger().info(f'✅ Gesture "{self.gesture_name}" executed successfully!')
             self.publish_status(f"completed_{self.gesture_name}_success", False)
+            # Reset state to be ready for next gesture
+            self.gesture_name = None
+            self.running = False
             return py_trees.common.Status.SUCCESS
         else:
             self.node.get_logger().error(f'❌ Gesture "{self.gesture_name}" failed')
             self.publish_status(f"completed_{self.gesture_name}_failed", False)
+            # Reset state to be ready for next gesture
+            self.gesture_name = None
+            self.running = False
             return py_trees.common.Status.FAILURE
 
     def start_gesture_execution(self):
