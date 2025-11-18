@@ -12,7 +12,7 @@ right_arm_waypoints:
   - {x: 0.280, y: 0.030, z: 0.460}    # 
   - {x: 0.300, y: 0.070, z: 0.350}   # 
   - {x: 0.210, y: 0.070, z: 0.220}  # 
-  - {x: 0.170, y: 0.040, z: 0.185}  #
+  - {x: 0.170, y: 0.040, z: 0.185} #
 
 # Left arm waypoints (stays in rest position)
 left_arm_waypoints:
