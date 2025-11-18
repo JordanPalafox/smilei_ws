@@ -13,6 +13,7 @@
   <depend>westwood_motor_interfaces</depend>
   <depend>westwood_motor_control_sdk_wrapper</depend>
   <depend>smilei_dual_arm_ik</depend>
+  <depend>smilei_dual_arm_ik_interfaces</depend>
 
   <exec_depend>python3-numpy</exec_depend>
 
