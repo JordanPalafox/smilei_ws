@@ -292,6 +292,10 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
         right_waypoints = gesture_config.get('right_arm_waypoints', [])
         left_waypoints = gesture_config.get('left_arm_waypoints', [])
 
+        # DEBUG: Log loaded waypoints
+        self.node.get_logger().info(f'🔍 DEBUG: Right waypoints loaded: {right_waypoints}')
+        self.node.get_logger().info(f'🔍 DEBUG: Left waypoints loaded: {left_waypoints}')
+
         right_joint_angles = []
         left_joint_angles = []
 
