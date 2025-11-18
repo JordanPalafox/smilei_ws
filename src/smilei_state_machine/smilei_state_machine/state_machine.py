@@ -261,7 +261,7 @@ def main():
     teleoperation = LocalTeleoperation(name="LocalTeleoperation", motor_ids=motor_ids, node=node, hardware_manager=hardware_manager)
     remote_teleoperation = RemoteTeleoperation(name="RemoteTeleoperation", motor_ids=motor_ids, node=node, hardware_manager=hardware_manager)
     disable = DisableRobot(name="DisableRobot", motor_ids=motor_ids, node=node, hardware_manager=hardware_manager)
-    autonomous_gesture = AutonomousGestureExecution(name="AutonomousGestureExecution", node=node)
+    autonomous_gesture = AutonomousGestureExecution(name="AutonomousGestureExecution", motor_ids=motor_ids, node=node, hardware_manager=hardware_manager)
 
     # Crear comportamiento raíz personalizado
     root = StateMachineRoot()
