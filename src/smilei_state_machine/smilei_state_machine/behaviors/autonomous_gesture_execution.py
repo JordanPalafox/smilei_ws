@@ -335,27 +335,46 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
             return None
 
     def save_trajectory_cache(self, gesture_name, trajectory):
-        """Save computed trajectory to cache file"""
-        trajectory_file = os.path.join(self.trajectories_directory, f'{gesture_name}_trajectory.yaml')
+        """Save computed trajectory to cache file (both install and source directories)"""
+        # Convert numpy arrays to lists for YAML serialization
+        cache_data = {
+            'gesture_name': gesture_name,
+            'generated': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'num_points': trajectory['right_arm']['num_points'],
+            'right_arm_trajectory': [point.tolist() for point in trajectory['right_arm']['trajectory']],
+            'left_arm_trajectory': [point.tolist() for point in trajectory['left_arm']['trajectory']]
+        }
 
+        saved_count = 0
+
+        # Save to install directory (for immediate use)
+        install_file = os.path.join(self.trajectories_directory, f'{gesture_name}_trajectory.yaml')
         try:
-            # Convert numpy arrays to lists for YAML serialization
-            cache_data = {
-                'gesture_name': gesture_name,
-                'generated': time.strftime('%Y-%m-%d %H:%M:%S'),
-                'num_points': trajectory['right_arm']['num_points'],
-                'right_arm_trajectory': [point.tolist() for point in trajectory['right_arm']['trajectory']],
-                'left_arm_trajectory': [point.tolist() for point in trajectory['left_arm']['trajectory']]
-            }
-
-            with open(trajectory_file, 'w') as f:
+            with open(install_file, 'w') as f:
                 yaml.dump(cache_data, f, default_flow_style=False)
-
-            self.node.get_logger().info(f'💾 Saved trajectory cache: {trajectory_file}')
-            return True
+            self.node.get_logger().info(f'💾 Saved to install: {install_file}')
+            saved_count += 1
         except Exception as e:
-            self.node.get_logger().error(f'Failed to save trajectory cache: {e}')
-            return False
+            self.node.get_logger().error(f'Failed to save to install directory: {e}')
+
+        # Save to source directory (for version control and persistence)
+        # Convert install path to source path
+        if '/install/' in self.trajectories_directory:
+            source_trajectories_dir = self.trajectories_directory.replace('/install/', '/src/').replace('/share/smilei_dual_arm_ik/', '/')
+            source_file = os.path.join(source_trajectories_dir, f'{gesture_name}_trajectory.yaml')
+
+            try:
+                # Ensure source directory exists
+                os.makedirs(source_trajectories_dir, exist_ok=True)
+
+                with open(source_file, 'w') as f:
+                    yaml.dump(cache_data, f, default_flow_style=False)
+                self.node.get_logger().info(f'💾 Saved to source: {source_file}')
+                saved_count += 1
+            except Exception as e:
+                self.node.get_logger().warning(f'Failed to save to source directory: {e}')
+
+        return saved_count > 0
 
     def solve_ik_for_gesture(self, gesture_config):
         """Solve IK for all waypoints in the gesture"""
