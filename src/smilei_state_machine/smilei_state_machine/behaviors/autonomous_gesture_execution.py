@@ -61,6 +61,7 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
 
         # Gestures directory
         self.gestures_directory = None
+        self.trajectories_directory = None
 
         # Publishers for state machine integration
         self.status_pub = None
@@ -111,8 +112,12 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
         # Initialize trajectory planner
         self.trajectory_planner = TrajectoryPlannerDualArm()
 
-        # Set gestures directory
+        # Set gestures and trajectories directories
         self.gestures_directory = os.path.join(pkg_share, 'config', 'gestures')
+        self.trajectories_directory = os.path.join(pkg_share, 'config', 'trajectories')
+
+        # Create trajectories directory if it doesn't exist
+        os.makedirs(self.trajectories_directory, exist_ok=True)
 
         # Subscribe to gesture command topic
         self.gesture_command_sub = self.node.create_subscription(
@@ -228,34 +233,47 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
         self.publish_status(f"starting_{self.gesture_name}", True)
 
         try:
-            # Load gesture from YAML
-            gesture_config = self.load_gesture_config(self.gesture_name)
-            if gesture_config is None:
-                self.execution_started = True
-                self.execution_complete = True
-                self.execution_success = False
-                return py_trees.common.Status.RUNNING
+            # Try to load cached trajectory first
+            trajectory = self.load_trajectory_cache(self.gesture_name)
 
-            # Solve IK for waypoints
-            right_angles, left_angles = self.solve_ik_for_gesture(gesture_config)
+            if trajectory is not None:
+                # Cached trajectory found - use it directly!
+                self.node.get_logger().info(f'⚡ Using cached trajectory - skipping IK/planning')
+            else:
+                # No cached trajectory - compute it
+                self.node.get_logger().info(f'🔧 Computing new trajectory...')
 
-            if not right_angles and not left_angles:
-                self.node.get_logger().error('IK solving failed for all waypoints')
-                self.execution_started = True
-                self.execution_complete = True
-                self.execution_success = False
-                return py_trees.common.Status.RUNNING
+                # Load gesture from YAML
+                gesture_config = self.load_gesture_config(self.gesture_name)
+                if gesture_config is None:
+                    self.execution_started = True
+                    self.execution_complete = True
+                    self.execution_success = False
+                    return py_trees.common.Status.RUNNING
 
-            # Plan trajectory
-            trajectory = self.plan_dual_arm_trajectory(
-                right_angles,
-                left_angles,
-                gesture_config.get('steps_per_segment', 50),
-                gesture_config.get('synchronized', False),
-                gesture_config.get('interpolation_method', 'cubic')
-            )
+                # Solve IK for waypoints
+                right_angles, left_angles = self.solve_ik_for_gesture(gesture_config)
 
-            # Execute trajectory
+                if not right_angles and not left_angles:
+                    self.node.get_logger().error('IK solving failed for all waypoints')
+                    self.execution_started = True
+                    self.execution_complete = True
+                    self.execution_success = False
+                    return py_trees.common.Status.RUNNING
+
+                # Plan trajectory
+                trajectory = self.plan_dual_arm_trajectory(
+                    right_angles,
+                    left_angles,
+                    gesture_config.get('steps_per_segment', 50),
+                    gesture_config.get('synchronized', False),
+                    gesture_config.get('interpolation_method', 'cubic')
+                )
+
+                # Save trajectory to cache for future use
+                self.save_trajectory_cache(self.gesture_name, trajectory)
+
+            # Execute trajectory (whether cached or newly computed)
             success = self.execute_trajectory(trajectory)
 
             self.execution_started = True
@@ -286,6 +304,58 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
         except Exception as e:
             self.node.get_logger().error(f'Error loading gesture: {e}')
             return None
+
+    def load_trajectory_cache(self, gesture_name):
+        """Load cached trajectory from file if it exists"""
+        trajectory_file = os.path.join(self.trajectories_directory, f'{gesture_name}_trajectory.yaml')
+
+        if not os.path.exists(trajectory_file):
+            return None
+
+        try:
+            with open(trajectory_file, 'r') as f:
+                cached_data = yaml.safe_load(f)
+
+            # Convert lists back to numpy arrays for consistency
+            trajectory = {
+                'right_arm': {
+                    'trajectory': [np.array(point) for point in cached_data['right_arm_trajectory']],
+                    'num_points': cached_data['num_points']
+                },
+                'left_arm': {
+                    'trajectory': [np.array(point) for point in cached_data['left_arm_trajectory']],
+                    'num_points': cached_data['num_points']
+                }
+            }
+
+            self.node.get_logger().info(f'📦 Loaded cached trajectory for: {gesture_name} ({cached_data["num_points"]} points)')
+            return trajectory
+        except Exception as e:
+            self.node.get_logger().warning(f'Failed to load cached trajectory: {e}')
+            return None
+
+    def save_trajectory_cache(self, gesture_name, trajectory):
+        """Save computed trajectory to cache file"""
+        trajectory_file = os.path.join(self.trajectories_directory, f'{gesture_name}_trajectory.yaml')
+
+        try:
+            # Convert numpy arrays to lists for YAML serialization
+            cache_data = {
+                'gesture_name': gesture_name,
+                'generated': time.strftime('%Y-%m-%d %H:%M:%S'),
+                'num_points': trajectory['right_arm']['num_points'],
+                'right_arm_trajectory': [point.tolist() for point in trajectory['right_arm']['trajectory']],
+                'left_arm_trajectory': [point.tolist() for point in trajectory['left_arm']['trajectory']]
+            }
+
+            with open(trajectory_file, 'w') as f:
+                yaml.dump(cache_data, f, default_flow_style=False)
+
+            self.node.get_logger().info(f'💾 Saved trajectory cache: {trajectory_file}')
+            return True
+        except Exception as e:
+            self.node.get_logger().error(f'Failed to save trajectory cache: {e}')
+            return False
 
     def solve_ik_for_gesture(self, gesture_config):
         """Solve IK for all waypoints in the gesture"""
