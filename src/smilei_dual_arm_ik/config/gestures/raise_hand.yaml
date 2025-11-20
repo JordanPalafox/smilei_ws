@@ -1,0 +1,15 @@
+# Gesture: Idle
+# Description: The robot's arms are in a neutral position
+
+# Execution parameters
+synchronized: false  # Independent arm motion
+interpolation_method: 'cubic'
+steps_per_segment: 15
+
+# Right arm waypoints (pointing gesture)
+right_arm_waypoints:
+  - {x: 0.160, y: 0.150, z: 0.310}
+
+# Left arm waypoints (stays in rest position)
+left_arm_waypoints: []
+
