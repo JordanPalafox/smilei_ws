@@ -4,7 +4,7 @@
 # Execution parameters
 synchronized: false  # Independent arm motion
 interpolation_method: 'cubic'
-steps_per_segment: 50
+steps_per_segment: 15
 
 # Right arm waypoints (pointing gesture)
 right_arm_waypoints:

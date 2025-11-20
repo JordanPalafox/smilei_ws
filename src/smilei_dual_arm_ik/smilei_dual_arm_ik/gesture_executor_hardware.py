@@ -497,11 +497,45 @@ class GestureExecutorHardware(Node):
                 gesture_config['left_waypoints']
             )
 
-            if len(right_angles) < 2 and len(left_angles) < 2:
+            # Check if we have at least 1 valid waypoint for either arm
+            if len(right_angles) < 1 and len(left_angles) < 1:
                 result.success = False
-                result.message = 'Not enough valid IK solutions'
+                result.message = 'No valid IK solutions found'
                 result.execution_time = time.time() - start_time
                 return result
+
+            # Handle single waypoint case - duplicate waypoint so planner has 2 points
+            # This allows smooth transition from current position to the single target
+            if len(right_angles) == 1:
+                self.get_logger().info('Right arm has 1 waypoint - duplicating for smooth motion')
+                right_angles.append(right_angles[0])  # Duplicate the waypoint
+
+            if len(left_angles) == 1:
+                self.get_logger().info('Left arm has 1 waypoint - duplicating for smooth motion')
+                left_angles.append(left_angles[0])  # Duplicate the waypoint
+
+            # If one arm has no waypoints, use current position
+            if len(right_angles) == 0:
+                self.get_logger().info('Right arm has no waypoints - holding current position')
+                # Get current right arm position
+                current_right = np.zeros(4)
+                for i in range(4):
+                    right_motor_id = self.right_motor_ids[i]
+                    if right_motor_id in self.motor_ids:
+                        idx = self.motor_ids.index(right_motor_id)
+                        current_right[i] = self.current_positions[idx]
+                right_angles = [current_right, current_right]
+
+            if len(left_angles) == 0:
+                self.get_logger().info('Left arm has no waypoints - holding current position')
+                # Get current left arm position
+                current_left = np.zeros(4)
+                for i in range(4):
+                    left_motor_id = self.left_motor_ids[i]
+                    if left_motor_id in self.motor_ids:
+                        idx = self.motor_ids.index(left_motor_id)
+                        current_left[i] = self.current_positions[idx]
+                left_angles = [current_left, current_left]
 
             # Phase 3: Plan trajectory
             feedback_msg.current_phase = 'planning'

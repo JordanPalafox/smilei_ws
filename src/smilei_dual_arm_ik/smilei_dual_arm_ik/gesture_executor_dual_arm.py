@@ -164,11 +164,32 @@ class GestureExecutorDualArm(Node):
                 gesture_config['left_waypoints']
             )
 
-            if len(right_angles) < 2 and len(left_angles) < 2:
+            # Check if we have at least 1 valid waypoint for either arm
+            if len(right_angles) < 1 and len(left_angles) < 1:
                 result.success = False
-                result.message = 'Not enough valid IK solutions'
+                result.message = 'No valid IK solutions found'
                 result.execution_time = time.time() - start_time
                 return result
+
+            # Handle single waypoint case - duplicate waypoint so planner has 2 points
+            if len(right_angles) == 1:
+                self.get_logger().info('Right arm has 1 waypoint - duplicating for smooth motion')
+                right_angles.append(right_angles[0])
+
+            if len(left_angles) == 1:
+                self.get_logger().info('Left arm has 1 waypoint - duplicating for smooth motion')
+                left_angles.append(left_angles[0])
+
+            # If one arm has no waypoints, use home position (all zeros)
+            if len(right_angles) == 0:
+                self.get_logger().info('Right arm has no waypoints - using home position')
+                home_position = np.zeros(4)
+                right_angles = [home_position, home_position]
+
+            if len(left_angles) == 0:
+                self.get_logger().info('Left arm has no waypoints - using home position')
+                home_position = np.zeros(4)
+                left_angles = [home_position, home_position]
 
             # Phase 3: Plan trajectory
             feedback_msg.current_phase = 'planning'
