@@ -1,0 +1,29 @@
+# Gesture: Heart
+# Description: A mini-heart gesture made with both arms
+
+
+
+
+
+# Execution parameters
+synchronized: false  # Independent arm motion
+interpolation_method: 'cubic'
+steps_per_segment: 50
+
+# Right arm waypoints (pointing gesture)
+right_arm_waypoints:
+  - {x: 0.110, y: 0.110, z: 0.320}  #
+  - {x: 0.160, y: 0.110, z: 0.360}    #
+  - {x: 0.200, y: 0.110, z: 0.320}   #
+  - {x: 0.180, y: 0.110, z: 0.270}  #
+  - {x: 0.160, y: 0.110, z: 0.240} #
+  - {x: 0.130, y: 0.110, z: 0.230} #
+
+# Left arm waypoints (stays in rest position)
+left_arm_waypoints:
+  - {x: -0.110, y: 0.110, z: 0.320}
+  - {x: -0.160, y: 0.110, z: 0.360}
+  - {x: -0.200, y: 0.110, z: 0.320}
+  - {x: -0.180, y: 0.110, z: 0.270}
+  - {x: -0.160, y: 0.110, z: 0.240}
+  - {x: -0.130, y: 0.110, z: 0.230}
