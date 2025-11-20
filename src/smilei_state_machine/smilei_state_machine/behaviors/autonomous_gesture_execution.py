@@ -254,12 +254,53 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
                 # Solve IK for waypoints
                 right_angles, left_angles = self.solve_ik_for_gesture(gesture_config)
 
-                if not right_angles and not left_angles:
-                    self.node.get_logger().error('IK solving failed for all waypoints')
+                # Check if we have at least 1 valid waypoint for either arm
+                if len(right_angles) < 1 and len(left_angles) < 1:
+                    self.node.get_logger().error('No valid IK solutions found')
                     self.execution_started = True
                     self.execution_complete = True
                     self.execution_success = False
                     return py_trees.common.Status.RUNNING
+
+                # Handle single waypoint case - duplicate waypoint so planner has 2 points
+                if len(right_angles) == 1:
+                    self.node.get_logger().info('Right arm has 1 waypoint - duplicating for smooth motion')
+                    right_angles.append(right_angles[0])
+
+                if len(left_angles) == 1:
+                    self.node.get_logger().info('Left arm has 1 waypoint - duplicating for smooth motion')
+                    left_angles.append(left_angles[0])
+
+                # If one arm has no waypoints, maintain current position
+                if len(right_angles) == 0:
+                    self.node.get_logger().info('Right arm has no waypoints - holding current position')
+                    current_right = np.zeros(4)
+
+                    # Try to get current position from hardware
+                    if self.hardware_manager is not None:
+                        try:
+                            positions = self.hardware_manager.get_present_position(*self.right_motor_ids)
+                            if len(positions) == 4:
+                                current_right = np.array(positions)
+                        except Exception as e:
+                            self.node.get_logger().warning(f'Could not read current right arm position: {e}')
+
+                    right_angles = [current_right, current_right]
+
+                if len(left_angles) == 0:
+                    self.node.get_logger().info('Left arm has no waypoints - holding current position')
+                    current_left = np.zeros(4)
+
+                    # Try to get current position from hardware
+                    if self.hardware_manager is not None:
+                        try:
+                            positions = self.hardware_manager.get_present_position(*self.left_motor_ids)
+                            if len(positions) == 4:
+                                current_left = np.array(positions)
+                        except Exception as e:
+                            self.node.get_logger().warning(f'Could not read current left arm position: {e}')
+
+                    left_angles = [current_left, current_left]
 
                 # Plan trajectory
                 trajectory = self.plan_dual_arm_trajectory(
