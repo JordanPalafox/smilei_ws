@@ -146,7 +146,8 @@ class HardwareWaypointRecorder(Node):
         self.get_logger().info('  Space: Capture current joint positions as waypoint')
         self.get_logger().info('  P: Print current joint positions')
         self.get_logger().info('  L: List all saved waypoints')
-        self.get_logger().info('  V: Clear waypoint visualization')
+        self.get_logger().info('  C: Clear all waypoints (delete cache)')
+        self.get_logger().info('  V: Clear visualization only (keep waypoints)')
         self.get_logger().info('  I: Interpolate and visualize trajectory')
         self.get_logger().info('  E: Export waypoints to YAML file')
         self.get_logger().info('  ESC: Exit')
@@ -210,6 +211,8 @@ class HardwareWaypointRecorder(Node):
             self.print_current_position()
         elif key == 'l' or key == 'L':
             self.list_waypoints()
+        elif key == 'c' or key == 'C':
+            self.clear_waypoints()
         elif key == 'v' or key == 'V':
             self.clear_visualization()
         elif key == 'i' or key == 'I':
@@ -335,6 +338,31 @@ class HardwareWaypointRecorder(Node):
         self.get_logger().info(f'   Right trajectory: {num_interp_right} points')
         self.get_logger().info(f'   Left trajectory: {num_interp_left} points')
         self.get_logger().info(f'   (Waypoints still saved: {len(self.waypoints)})')
+        self.get_logger().info('='*60)
+        self.get_logger().info('')
+
+        # Publish empty marker array to clear visualization
+        self.publish_waypoint_markers()
+
+    def clear_waypoints(self):
+        """Clear all saved waypoints AND visualization"""
+        num_waypoints = len(self.waypoints)
+        num_right = len(self.persisted_right_ee_positions)
+        num_left = len(self.persisted_left_ee_positions)
+
+        # Clear everything
+        self.waypoints = []
+        self.persisted_right_ee_positions = []
+        self.persisted_left_ee_positions = []
+        self.interpolated_right_trajectory = []
+        self.interpolated_left_trajectory = []
+
+        self.get_logger().info('')
+        self.get_logger().info('='*60)
+        self.get_logger().info(f'🗑️  Cleared ALL waypoints:')
+        self.get_logger().info(f'   Waypoints deleted: {num_waypoints}')
+        self.get_logger().info(f'   Right markers deleted: {num_right}')
+        self.get_logger().info(f'   Left markers deleted: {num_left}')
         self.get_logger().info('='*60)
         self.get_logger().info('')
 
