@@ -2,12 +2,14 @@
 """
 Hardware Waypoint Recorder - Keyboard-controlled joint angle waypoint capture
 
-Records motor joint positions from hardware and allows saving them as waypoints.
+Records joint positions from /joint_states topic and allows saving them as waypoints.
+Works in conjunction with hardware_joint_state_publisher which reads from hardware.
+
 You can physically move the robot arms to desired positions and capture them.
 
 Keyboard Controls:
-  Space: Capture current motor positions as waypoint
-  P: Print current motor positions
+  Space: Capture current joint positions as waypoint
+  P: Print current joint positions
   L: List all saved waypoints
   C: Clear all saved waypoints
   E: Export waypoints to YAML file
@@ -15,10 +17,17 @@ Keyboard Controls:
 
 The waypoints are saved as joint angles for each arm, ready to be used
 for trajectory planning or gesture execution.
+
+Usage:
+  Run alongside hardware_visualization.launch.py:
+
+  Terminal 1: ros2 launch smilei_dual_arm_ik hardware_visualization.launch.py
+  Terminal 2: ros2 run smilei_dual_arm_ik hardware_waypoint_recorder.py
 """
 
 import rclpy
 from rclpy.node import Node
+from sensor_msgs.msg import JointState
 import sys
 import termios
 import tty
@@ -28,41 +37,17 @@ import yaml
 import os
 from datetime import datetime
 
-# Import HardwareManager from smilei_state_machine
-sys.path.append('/home/rovestrada/smilei_ws/src/smilei_state_machine')
-from smilei_state_machine.hardware_manager import HardwareManager
-
 
 class HardwareWaypointRecorder(Node):
     """
-    ROS2 Node that records motor positions as waypoints using keyboard control
+    ROS2 Node that records joint positions from /joint_states topic as waypoints
     """
 
     def __init__(self):
         super().__init__('hardware_waypoint_recorder')
 
-        # Declare hardware manager parameters
-        self.declare_parameter('hardware_manager.usb_ports', ['/dev/ttyUSB0', '/dev/ttyUSB1'])
-        self.declare_parameter('hardware_manager.baudrate', 8000000)
-        self.declare_parameter('hardware_manager.auto_detect', True)
-        self.declare_parameter('hardware_manager.debug', False)
-
-        # Declare motor configuration parameters
-        self.declare_parameter('motors.right_arm_ids', [1, 2, 3, 4])
-        self.declare_parameter('motors.left_arm_ids', [5, 6, 7, 8])
-
         # Declare output directory for YAML exports
         self.declare_parameter('output_directory', '')
-
-        # Load parameters
-        usb_ports = self.get_parameter('hardware_manager.usb_ports').value
-        baudrate = self.get_parameter('hardware_manager.baudrate').value
-        auto_detect = self.get_parameter('hardware_manager.auto_detect').value
-        debug = self.get_parameter('hardware_manager.debug').value
-
-        # Motor ID mappings
-        self.right_motor_ids = self.get_parameter('motors.right_arm_ids').value
-        self.left_motor_ids = self.get_parameter('motors.left_arm_ids').value
 
         # Output directory
         output_dir = self.get_parameter('output_directory').value
@@ -74,44 +59,43 @@ class HardwareWaypointRecorder(Node):
         else:
             self.output_directory = output_dir
 
-        # Initialize hardware manager
-        self.get_logger().info('Initializing hardware manager...')
-        self.hardware_manager = HardwareManager(
-            node=self,
-            usb_ports=usb_ports,
-            baudrate=baudrate,
-            auto_detect=auto_detect,
-            debug=debug
-        )
+        # Current joint state
+        self.current_joint_state = None
+        self.last_joint_state_time = None
 
-        # Get available motors
-        self.motor_ids = self.hardware_manager.get_available_motors()
-        if not self.motor_ids:
-            self.get_logger().error('No motors detected!')
-            raise RuntimeError('Failed to detect any motors')
+        # Joint angles (4 per arm)
+        self.current_right_angles = np.zeros(4)
+        self.current_left_angles = np.zeros(4)
 
-        self.get_logger().info(f'Detected motors: {self.motor_ids}')
-        self.get_logger().info(f'Motor mapping - Right: {self.right_motor_ids}, Left: {self.left_motor_ids}')
-
-        # Motor state variables
-        self.current_positions = [0.0] * 8
+        # Joint names (must match hardware_joint_state_publisher)
+        self.right_joint_names = [
+            'right_joint_0', 'right_joint_1', 'right_joint_2', 'right_joint_3'
+        ]
+        self.left_joint_names = [
+            'left_joint_0', 'left_joint_1', 'left_joint_2', 'left_joint_3'
+        ]
 
         # Saved waypoints (list of dicts with 'right' and 'left' joint angles)
         self.waypoints = []
+
+        # Subscribe to joint states topic
+        self.joint_state_sub = self.create_subscription(
+            JointState,
+            '/joint_states',
+            self.joint_state_callback,
+            10
+        )
 
         # Keyboard input thread
         self.running = True
         self.input_thread = threading.Thread(target=self.keyboard_input_loop, daemon=True)
         self.input_thread.start()
 
-        # Timer to continuously read motor positions
-        self.read_timer = self.create_timer(0.1, self.read_motor_positions)
-
         # Print instructions
         self.print_instructions()
 
-        # Read initial positions
-        self.read_motor_positions()
+        self.get_logger().info('Waiting for joint states on /joint_states...')
+        self.get_logger().info('Make sure hardware_joint_state_publisher is running!')
 
     def print_instructions(self):
         """Print keyboard control instructions"""
@@ -119,12 +103,20 @@ class HardwareWaypointRecorder(Node):
         self.get_logger().info('='*60)
         self.get_logger().info('Hardware Waypoint Recorder')
         self.get_logger().info('='*60)
+        self.get_logger().info('Subscribes to /joint_states topic to read joint positions.')
+        self.get_logger().info('')
+        self.get_logger().info('Usage:')
+        self.get_logger().info('  Terminal 1: ros2 launch smilei_dual_arm_ik \\')
+        self.get_logger().info('              hardware_visualization.launch.py')
+        self.get_logger().info('  Terminal 2: ros2 run smilei_dual_arm_ik \\')
+        self.get_logger().info('              hardware_waypoint_recorder.py')
+        self.get_logger().info('')
         self.get_logger().info('Physically move the robot arms to desired positions,')
         self.get_logger().info('then press Space to capture waypoint.')
         self.get_logger().info('')
         self.get_logger().info('Keyboard Controls:')
-        self.get_logger().info('  Space: Capture current motor positions as waypoint')
-        self.get_logger().info('  P: Print current motor positions')
+        self.get_logger().info('  Space: Capture current joint positions as waypoint')
+        self.get_logger().info('  P: Print current joint positions')
         self.get_logger().info('  L: List all saved waypoints')
         self.get_logger().info('  C: Clear all saved waypoints')
         self.get_logger().info('  E: Export waypoints to YAML file')
@@ -134,42 +126,31 @@ class HardwareWaypointRecorder(Node):
         self.get_logger().info('='*60)
         self.get_logger().info('')
 
-    def read_motor_positions(self):
-        """Read current positions from all motors"""
-        try:
-            # Get positions for all motors
-            positions = self.hardware_manager.get_present_position(*self.motor_ids)
+    def joint_state_callback(self, msg: JointState):
+        """Callback for /joint_states topic"""
+        self.current_joint_state = msg
+        self.last_joint_state_time = self.get_clock().now()
 
-            if len(positions) == len(self.motor_ids):
-                self.current_positions = positions[:]
-                return True
-            else:
-                return False
+        # Extract joint positions by name
+        try:
+            # Right arm
+            for i, joint_name in enumerate(self.right_joint_names):
+                if joint_name in msg.name:
+                    idx = msg.name.index(joint_name)
+                    self.current_right_angles[i] = msg.position[idx]
+
+            # Left arm
+            for i, joint_name in enumerate(self.left_joint_names):
+                if joint_name in msg.name:
+                    idx = msg.name.index(joint_name)
+                    self.current_left_angles[i] = msg.position[idx]
 
         except Exception as e:
-            self.get_logger().error(f'Error reading motor positions: {e}')
-            return False
+            self.get_logger().error(f'Error parsing joint state: {e}')
 
     def get_current_joint_angles(self):
         """Get current joint angles for both arms"""
-        # Map motor positions to arm joint angles
-        right_angles = np.zeros(4)
-        left_angles = np.zeros(4)
-
-        for i in range(4):
-            # Right arm
-            right_motor_id = self.right_motor_ids[i]
-            if right_motor_id in self.motor_ids:
-                idx = self.motor_ids.index(right_motor_id)
-                right_angles[i] = self.current_positions[idx]
-
-            # Left arm
-            left_motor_id = self.left_motor_ids[i]
-            if left_motor_id in self.motor_ids:
-                idx = self.motor_ids.index(left_motor_id)
-                left_angles[i] = self.current_positions[idx]
-
-        return right_angles, left_angles
+        return self.current_right_angles.copy(), self.current_left_angles.copy()
 
     def get_key(self):
         """Get a single keypress from terminal"""
