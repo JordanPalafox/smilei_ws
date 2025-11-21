@@ -251,8 +251,42 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
                     self.execution_success = False
                     return py_trees.common.Status.RUNNING
 
-                # Solve IK for waypoints
-                right_angles, left_angles = self.solve_ik_for_gesture(gesture_config)
+                # Check control mode (default to 'cartesian' for backward compatibility)
+                control_mode = gesture_config.get('control_mode', 'cartesian')
+                self.node.get_logger().info(f'🎮 Control Mode: {control_mode.upper()}')
+
+                # Branch based on control mode
+                if control_mode == 'joint':
+                    # JOINT MODE: Extract joint angles directly (no IK needed)
+                    self.node.get_logger().info('📐 Joint mode - extracting joint angles directly')
+
+                    # Configure motors for position control mode (mode 2)
+                    if not self.configure_motors_for_position_mode():
+                        self.node.get_logger().error('Failed to configure motors for position mode')
+                        self.execution_started = True
+                        self.execution_complete = True
+                        self.execution_success = False
+                        return py_trees.common.Status.RUNNING
+
+                    # Extract joint angles from gesture config
+                    right_angles, left_angles = self.extract_joint_angles_from_gesture(gesture_config)
+
+                elif control_mode == 'cartesian':
+                    # CARTESIAN MODE: Solve IK to convert cartesian waypoints to joint angles
+                    self.node.get_logger().info('🗺️  Cartesian mode - solving IK for waypoints')
+
+                    # Note: For cartesian mode, motors should use position control (set_goal_position)
+                    # No special motor configuration needed - uses default mode
+
+                    # Solve IK for waypoints
+                    right_angles, left_angles = self.solve_ik_for_gesture(gesture_config)
+
+                else:
+                    self.node.get_logger().error(f'Unknown control mode: {control_mode}')
+                    self.execution_started = True
+                    self.execution_complete = True
+                    self.execution_success = False
+                    return py_trees.common.Status.RUNNING
 
                 # Check if we have at least 1 valid waypoint for either arm
                 if len(right_angles) < 1 and len(left_angles) < 1:
@@ -446,6 +480,63 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
                 self.node.get_logger().warning(f'IK failed for left waypoint: {target_pos}')
 
         return right_joint_angles, left_joint_angles
+
+    def extract_joint_angles_from_gesture(self, gesture_config):
+        """Extract joint angles directly from joint mode gesture (no IK needed)"""
+        right_waypoints = gesture_config.get('right_arm_waypoints', [])
+        left_waypoints = gesture_config.get('left_arm_waypoints', [])
+
+        right_joint_angles = []
+        left_joint_angles = []
+
+        # Extract right arm joint angles
+        for waypoint in right_waypoints:
+            joints = waypoint.get('joints', [])
+            if len(joints) == 4:
+                right_joint_angles.append(np.array(joints))
+            else:
+                self.node.get_logger().warning(f'Invalid right arm waypoint (expected 4 joints, got {len(joints)})')
+
+        # Extract left arm joint angles
+        for waypoint in left_waypoints:
+            joints = waypoint.get('joints', [])
+            if len(joints) == 4:
+                left_joint_angles.append(np.array(joints))
+            else:
+                self.node.get_logger().warning(f'Invalid left arm waypoint (expected 4 joints, got {len(joints)})')
+
+        self.node.get_logger().info(f'📐 Extracted joint angles: {len(right_joint_angles)} right, {len(left_joint_angles)} left')
+        return right_joint_angles, left_joint_angles
+
+    def configure_motors_for_position_mode(self):
+        """Configure motors for position control mode (mode 2) - for joint mode gestures"""
+        if not self.hardware_manager:
+            self.node.get_logger().info('[SIM] Would configure motors for position mode')
+            return True
+
+        try:
+            self.node.get_logger().info('⚙️  Configuring motors for POSITION CONTROL (mode 2)')
+
+            # Configure PID gains for position mode (same as enable_robot)
+            if not self.hardware_manager.configure_pid_gains(self.motor_ids, p_gain=5.0, d_gain=0.2, i_gain=0.0):
+                self.node.get_logger().error('Failed to configure PID gains')
+                return False
+
+            # Set position mode and limits
+            if not self.hardware_manager.set_position_mode_and_limits(self.motor_ids, iq_max=3.0):
+                self.node.get_logger().error('Failed to set position mode')
+                return False
+
+            # Enable torque
+            enable_pairs = [(motor_id, 1) for motor_id in self.motor_ids]
+            self.hardware_manager.set_torque_enable(*enable_pairs)
+
+            self.node.get_logger().info('✅ Motors configured for position mode')
+            return True
+
+        except Exception as e:
+            self.node.get_logger().error(f'Error configuring motors for position mode: {e}')
+            return False
 
     def plan_dual_arm_trajectory(self, right_angles, left_angles, steps_per_segment,
                                   synchronized, interpolation_method):

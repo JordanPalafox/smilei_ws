@@ -40,6 +40,7 @@ setup(
             'interactive_marker_node = smilei_dual_arm_ik.interactive_marker_node:main',
             'marker_control_node = smilei_dual_arm_ik.marker_control_node:main',
             'hardware_joint_state_publisher = smilei_dual_arm_ik.hardware_joint_state_publisher:main',
+            'hardware_waypoint_recorder = smilei_dual_arm_ik.hardware_waypoint_recorder:main',
             'test_node = smilei_dual_arm_ik.test_node:main',
         ],
     },
