@@ -28,6 +28,9 @@ Usage:
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
+from visualization_msgs.msg import Marker, MarkerArray
+from std_msgs.msg import ColorRGBA
+from geometry_msgs.msg import Point
 import sys
 import termios
 import tty
@@ -36,6 +39,11 @@ import numpy as np
 import yaml
 import os
 from datetime import datetime
+from scipy.interpolate import CubicSpline
+from ament_index_python.packages import get_package_share_directory
+
+# Import forward kinematics for visualization
+from smilei_dual_arm_ik.inverse_kinematics_dual_arm import InverseKinematicsDualArm
 
 
 class HardwareWaypointRecorder(Node):
@@ -78,11 +86,31 @@ class HardwareWaypointRecorder(Node):
         # Saved waypoints (list of dicts with 'right' and 'left' joint angles)
         self.waypoints = []
 
+        # Persisted end-effector positions for visualization
+        self.persisted_right_ee_positions = []  # Cartesian positions of right end effector
+        self.persisted_left_ee_positions = []   # Cartesian positions of left end effector
+
+        # Interpolated trajectory points for visualization
+        self.interpolated_right_trajectory = []
+        self.interpolated_left_trajectory = []
+
+        # Initialize FK solver for end-effector position calculation
+        pkg_share = get_package_share_directory('smilei_dual_arm_ik')
+        robot_params_file = os.path.join(pkg_share, 'config', 'robot_parameters.yaml')
+        self.fk_solver = InverseKinematicsDualArm(robot_params_file)
+
         # Subscribe to joint states topic
         self.joint_state_sub = self.create_subscription(
             JointState,
             '/joint_states',
             self.joint_state_callback,
+            10
+        )
+
+        # Publisher for visualization markers
+        self.markers_pub = self.create_publisher(
+            MarkerArray,
+            '/waypoint_markers',
             10
         )
 
@@ -118,7 +146,8 @@ class HardwareWaypointRecorder(Node):
         self.get_logger().info('  Space: Capture current joint positions as waypoint')
         self.get_logger().info('  P: Print current joint positions')
         self.get_logger().info('  L: List all saved waypoints')
-        self.get_logger().info('  C: Clear all saved waypoints')
+        self.get_logger().info('  V: Clear waypoint visualization')
+        self.get_logger().info('  I: Interpolate and visualize trajectory')
         self.get_logger().info('  E: Export waypoints to YAML file')
         self.get_logger().info('  ESC: Exit')
         self.get_logger().info('='*60)
@@ -181,8 +210,10 @@ class HardwareWaypointRecorder(Node):
             self.print_current_position()
         elif key == 'l' or key == 'L':
             self.list_waypoints()
-        elif key == 'c' or key == 'C':
-            self.clear_waypoints()
+        elif key == 'v' or key == 'V':
+            self.clear_visualization()
+        elif key == 'i' or key == 'I':
+            self.interpolate_and_visualize()
         elif key == 'e' or key == 'E':
             self.export_waypoints()
         elif key == '\x1b':  # ESC
@@ -215,29 +246,55 @@ class HardwareWaypointRecorder(Node):
         self.get_logger().info('')
 
     def capture_waypoint(self):
-        """Capture current motor positions as a waypoint"""
+        """Capture current motor positions as a waypoint and visualize end-effector positions"""
         right_angles, left_angles = self.get_current_joint_angles()
 
+        # Save joint angles
         waypoint = {
             'right': right_angles.tolist(),
             'left': left_angles.tolist()
         }
-
         self.waypoints.append(waypoint)
+
+        # Calculate and save end-effector positions for visualization
+        try:
+            # Right arm FK
+            T_right = self.fk_solver.forward_kinematics_right_arm(right_angles)
+            right_ee_pos = T_right[:3, 3]  # Extract [x, y, z]
+            self.persisted_right_ee_positions.append(right_ee_pos.tolist())
+
+            # Left arm FK
+            T_left = self.fk_solver.forward_kinematics_left_arm(left_angles)
+            left_ee_pos = T_left[:3, 3]  # Extract [x, y, z]
+            self.persisted_left_ee_positions.append(left_ee_pos.tolist())
+
+        except Exception as e:
+            self.get_logger().error(f'Error calculating FK: {e}')
 
         self.get_logger().info('')
         self.get_logger().info('='*60)
-        self.get_logger().info(f'✅ Waypoint {len(self.waypoints)} captured!')
+        self.get_logger().info(f'✅ Waypoint {len(self.waypoints)} captured & visualized!')
         self.get_logger().info('='*60)
         self.get_logger().info('Right Arm:')
         for i in range(4):
             self.get_logger().info(f'  Joint {i}: {right_angles[i]:+.4f} rad')
+        if len(self.persisted_right_ee_positions) > 0:
+            pos = self.persisted_right_ee_positions[-1]
+            self.get_logger().info(f'  End Effector: [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]')
+
         self.get_logger().info('Left Arm:')
         for i in range(4):
             self.get_logger().info(f'  Joint {i}: {left_angles[i]:+.4f} rad')
+        if len(self.persisted_left_ee_positions) > 0:
+            pos = self.persisted_left_ee_positions[-1]
+            self.get_logger().info(f'  End Effector: [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]')
+
         self.get_logger().info(f'Total waypoints: {len(self.waypoints)}')
         self.get_logger().info('='*60)
         self.get_logger().info('')
+
+        # Publish visualization markers
+        self.publish_waypoint_markers()
 
     def list_waypoints(self):
         """List all saved waypoints"""
@@ -258,16 +315,31 @@ class HardwareWaypointRecorder(Node):
         self.get_logger().info('='*60)
         self.get_logger().info('')
 
-    def clear_waypoints(self):
-        """Clear all saved waypoints"""
-        num_waypoints = len(self.waypoints)
-        self.waypoints = []
+    def clear_visualization(self):
+        """Clear waypoint visualization (but keep waypoints)"""
+        num_right = len(self.persisted_right_ee_positions)
+        num_left = len(self.persisted_left_ee_positions)
+        num_interp_right = len(self.interpolated_right_trajectory)
+        num_interp_left = len(self.interpolated_left_trajectory)
+
+        self.persisted_right_ee_positions = []
+        self.persisted_left_ee_positions = []
+        self.interpolated_right_trajectory = []
+        self.interpolated_left_trajectory = []
 
         self.get_logger().info('')
         self.get_logger().info('='*60)
-        self.get_logger().info(f'🗑️  Cleared {num_waypoints} waypoints')
+        self.get_logger().info(f'🧹 Cleared visualization:')
+        self.get_logger().info(f'   Right markers: {num_right}')
+        self.get_logger().info(f'   Left markers: {num_left}')
+        self.get_logger().info(f'   Right trajectory: {num_interp_right} points')
+        self.get_logger().info(f'   Left trajectory: {num_interp_left} points')
+        self.get_logger().info(f'   (Waypoints still saved: {len(self.waypoints)})')
         self.get_logger().info('='*60)
         self.get_logger().info('')
+
+        # Publish empty marker array to clear visualization
+        self.publish_waypoint_markers()
 
     def export_waypoints(self):
         """Export waypoints to YAML file in joint mode format"""
@@ -333,6 +405,192 @@ class HardwareWaypointRecorder(Node):
 
         except Exception as e:
             self.get_logger().error(f'Failed to export waypoints: {e}')
+
+    def interpolate_and_visualize(self):
+        """Interpolate trajectories between waypoints and visualize"""
+        if len(self.waypoints) < 2:
+            self.get_logger().warn('⚠️  Need at least 2 waypoints to interpolate!')
+            self.get_logger().warn(f'   Currently saved: {len(self.waypoints)} waypoint(s)')
+            return
+
+        self.get_logger().info('')
+        self.get_logger().info('='*60)
+        self.get_logger().info(f'🔄 Interpolating trajectories for {len(self.waypoints)} waypoints...')
+
+        try:
+            # Extract joint angles for interpolation
+            right_joint_waypoints = []
+            left_joint_waypoints = []
+
+            for waypoint in self.waypoints:
+                right_joint_waypoints.append(waypoint['right'])
+                left_joint_waypoints.append(waypoint['left'])
+
+            # Convert to numpy arrays
+            right_joints = np.array(right_joint_waypoints)  # Shape: (num_waypoints, 4)
+            left_joints = np.array(left_joint_waypoints)    # Shape: (num_waypoints, 4)
+
+            # Create parameter t for interpolation
+            num_waypoints = len(self.waypoints)
+            t = np.linspace(0, 1, num_waypoints)
+
+            # Interpolate each joint independently using cubic splines
+            num_interp_points = (num_waypoints - 1) * 50
+            t_interp = np.linspace(0, 1, num_interp_points)
+
+            # Interpolate right arm joints
+            right_interp_joints = np.zeros((num_interp_points, 4))
+            for joint_idx in range(4):
+                cs = CubicSpline(t, right_joints[:, joint_idx])
+                right_interp_joints[:, joint_idx] = cs(t_interp)
+
+            # Interpolate left arm joints
+            left_interp_joints = np.zeros((num_interp_points, 4))
+            for joint_idx in range(4):
+                cs = CubicSpline(t, left_joints[:, joint_idx])
+                left_interp_joints[:, joint_idx] = cs(t_interp)
+
+            # Calculate FK for interpolated joint angles to get cartesian positions
+            self.interpolated_right_trajectory = []
+            self.interpolated_left_trajectory = []
+
+            for i in range(num_interp_points):
+                # Right arm FK
+                T_right = self.fk_solver.forward_kinematics_right_arm(right_interp_joints[i])
+                right_pos = T_right[:3, 3].tolist()
+                self.interpolated_right_trajectory.append(right_pos)
+
+                # Left arm FK
+                T_left = self.fk_solver.forward_kinematics_left_arm(left_interp_joints[i])
+                left_pos = T_left[:3, 3].tolist()
+                self.interpolated_left_trajectory.append(left_pos)
+
+            self.get_logger().info(f'✅ Interpolation complete!')
+            self.get_logger().info(f'   Right trajectory: {len(self.interpolated_right_trajectory)} points')
+            self.get_logger().info(f'   Left trajectory: {len(self.interpolated_left_trajectory)} points')
+            self.get_logger().info(f'   Using cubic spline interpolation')
+            self.get_logger().info('='*60)
+            self.get_logger().info('')
+
+            # Publish visualization
+            self.publish_waypoint_markers()
+
+        except Exception as e:
+            self.get_logger().error(f'❌ Interpolation failed: {e}')
+            self.get_logger().info('='*60)
+            self.get_logger().info('')
+
+    def publish_waypoint_markers(self):
+        """Publish visualization markers for waypoints and trajectories"""
+        marker_array = MarkerArray()
+
+        # Delete all previous markers first
+        delete_marker = Marker()
+        delete_marker.action = Marker.DELETEALL
+        marker_array.markers.append(delete_marker)
+        self.markers_pub.publish(marker_array)
+
+        # Clear and rebuild
+        marker_array = MarkerArray()
+
+        # Publish right arm waypoint markers (RED spheres)
+        for i, pos in enumerate(self.persisted_right_ee_positions):
+            marker = Marker()
+            marker.header.frame_id = 'base_link'
+            marker.header.stamp = self.get_clock().now().to_msg()
+            marker.ns = 'right_waypoints'
+            marker.id = i
+            marker.type = Marker.SPHERE
+            marker.action = Marker.ADD
+
+            marker.pose.position.x = pos[0]
+            marker.pose.position.y = pos[1]
+            marker.pose.position.z = pos[2]
+            marker.pose.orientation.w = 1.0
+
+            marker.scale.x = 0.015
+            marker.scale.y = 0.015
+            marker.scale.z = 0.015
+
+            # RED for right arm
+            marker.color = ColorRGBA(r=1.0, g=0.0, b=0.0, a=0.9)
+
+            marker_array.markers.append(marker)
+
+        # Publish left arm waypoint markers (BLUE spheres)
+        for i, pos in enumerate(self.persisted_left_ee_positions):
+            marker = Marker()
+            marker.header.frame_id = 'base_link'
+            marker.header.stamp = self.get_clock().now().to_msg()
+            marker.ns = 'left_waypoints'
+            marker.id = i + 1000
+            marker.type = Marker.SPHERE
+            marker.action = Marker.ADD
+
+            marker.pose.position.x = pos[0]
+            marker.pose.position.y = pos[1]
+            marker.pose.position.z = pos[2]
+            marker.pose.orientation.w = 1.0
+
+            marker.scale.x = 0.015
+            marker.scale.y = 0.015
+            marker.scale.z = 0.015
+
+            # BLUE for left arm
+            marker.color = ColorRGBA(r=0.0, g=0.0, b=1.0, a=0.9)
+
+            marker_array.markers.append(marker)
+
+        # Publish right arm interpolated trajectory (ORANGE small spheres)
+        for i, pos in enumerate(self.interpolated_right_trajectory):
+            marker = Marker()
+            marker.header.frame_id = 'base_link'
+            marker.header.stamp = self.get_clock().now().to_msg()
+            marker.ns = 'right_trajectory'
+            marker.id = i + 2000
+            marker.type = Marker.SPHERE
+            marker.action = Marker.ADD
+
+            marker.pose.position.x = pos[0]
+            marker.pose.position.y = pos[1]
+            marker.pose.position.z = pos[2]
+            marker.pose.orientation.w = 1.0
+
+            marker.scale.x = 0.004
+            marker.scale.y = 0.004
+            marker.scale.z = 0.004
+
+            # ORANGE for right trajectory
+            marker.color = ColorRGBA(r=1.0, g=0.5, b=0.0, a=0.6)
+
+            marker_array.markers.append(marker)
+
+        # Publish left arm interpolated trajectory (CYAN small spheres)
+        for i, pos in enumerate(self.interpolated_left_trajectory):
+            marker = Marker()
+            marker.header.frame_id = 'base_link'
+            marker.header.stamp = self.get_clock().now().to_msg()
+            marker.ns = 'left_trajectory'
+            marker.id = i + 10000
+            marker.type = Marker.SPHERE
+            marker.action = Marker.ADD
+
+            marker.pose.position.x = pos[0]
+            marker.pose.position.y = pos[1]
+            marker.pose.position.z = pos[2]
+            marker.pose.orientation.w = 1.0
+
+            marker.scale.x = 0.004
+            marker.scale.y = 0.004
+            marker.scale.z = 0.004
+
+            # CYAN for left trajectory
+            marker.color = ColorRGBA(r=0.0, g=1.0, b=1.0, a=0.6)
+
+            marker_array.markers.append(marker)
+
+        # Publish all markers
+        self.markers_pub.publish(marker_array)
 
 
 def main(args=None):
