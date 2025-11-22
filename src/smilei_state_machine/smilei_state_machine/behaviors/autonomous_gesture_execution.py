@@ -77,6 +77,15 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
         # Behavior activation state (separate from gesture execution state)
         self.is_active = False  # True when behavior is in active state, False otherwise
 
+        # Loop control
+        self.loop_mode = False  # True = loop gesture, False = execute once
+        self.loop_count = 0  # Number of times the gesture has looped
+        self.loop_start_time = None  # When the loop started
+        self.loop_max_count = None  # Maximum loop iterations (None = infinite)
+        self.loop_timeout = 300.0  # Maximum loop duration in seconds (default 5 min)
+        self._loop_set_by_topic = False  # Flag to track if loop was set via topic
+        self.gesture_control_sub = None  # Subscriber for loop control
+
         # Motor state for control
         self.current_positions = [0.0] * 8
         self.target_positions = [0.0] * 8
@@ -127,6 +136,14 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
             10
         )
 
+        # Subscribe to gesture control topic (loop control)
+        self.gesture_control_sub = self.node.create_subscription(
+            String,
+            '/gesture_control',
+            self.gesture_control_callback,
+            10
+        )
+
         # Create publishers for state machine integration
         self.status_pub = self.node.create_publisher(
             String,
@@ -168,6 +185,36 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
             self.running = True
         else:
             self.node.get_logger().info(f'💤 Behavior inactive - gesture ignored')
+
+    def gesture_control_callback(self, msg):
+        """Callback for gesture control commands (loop control)"""
+        command = msg.data.lower()
+
+        if command == 'loop':
+            self.loop_mode = True
+            self._loop_set_by_topic = True
+            if self.loop_start_time is None:
+                self.loop_start_time = time.time()
+                self.loop_count = 0
+            self.node.get_logger().info('🔄 Loop mode ENABLED via topic - gesture will repeat')
+
+        elif command == 'once':
+            self.loop_mode = False
+            self._loop_set_by_topic = True
+            self.loop_count = 0
+            self.loop_start_time = None
+            self.node.get_logger().info('▶️ Single execution mode via topic - gesture will execute once')
+
+        elif command == 'stop':
+            self.loop_mode = False
+            self.running = False
+            self._loop_set_by_topic = False
+            self.loop_count = 0
+            self.loop_start_time = None
+            self.node.get_logger().info('⏹️ Stop command received - stopping gesture execution')
+
+        else:
+            self.node.get_logger().warning(f'⚠️ Unknown control command: {command} (use: loop/once/stop)')
 
     def initialise(self) -> None:
         """Called when behavior is activated"""
@@ -211,20 +258,62 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
         if not self.execution_complete:
             return py_trees.common.Status.RUNNING
 
-        # Execution complete - return result and reset for next gesture
+        # Execution complete - check if we should loop or finish
         if self.execution_success:
             self.node.get_logger().info(f'✅ Gesture "{self.gesture_name}" executed successfully!')
             self.publish_status(f"completed_{self.gesture_name}_success", False)
-            # Reset state to be ready for next gesture
-            self.gesture_name = None
-            self.running = False
-            return py_trees.common.Status.SUCCESS
+
+            # Check if we should loop
+            if self.loop_mode:
+                self.loop_count += 1
+
+                # Safety check: max iteration count
+                if self.loop_max_count is not None and self.loop_count >= self.loop_max_count:
+                    self.node.get_logger().info(f'🏁 Max loop count reached ({self.loop_max_count}) - stopping')
+                    self.gesture_name = None
+                    self.running = False
+                    self.loop_mode = False
+                    self.loop_count = 0
+                    self.loop_start_time = None
+                    return py_trees.common.Status.SUCCESS
+
+                # Safety check: timeout
+                if self.loop_start_time is not None:
+                    elapsed_time = time.time() - self.loop_start_time
+                    if elapsed_time >= self.loop_timeout:
+                        self.node.get_logger().warning(f'⏱️ Loop timeout reached ({self.loop_timeout}s) - stopping for safety')
+                        self.gesture_name = None
+                        self.running = False
+                        self.loop_mode = False
+                        self.loop_count = 0
+                        self.loop_start_time = None
+                        return py_trees.common.Status.SUCCESS
+
+                self.node.get_logger().info(f'🔄 Loop mode active - repeating gesture (iteration {self.loop_count})')
+
+                # Reset execution flags to restart the gesture
+                self.execution_started = False
+                self.execution_complete = False
+                self.execution_success = False
+
+                # Return RUNNING to continue the loop
+                return py_trees.common.Status.RUNNING
+            else:
+                # Single execution mode - reset state and finish
+                self.gesture_name = None
+                self.running = False
+                self.loop_count = 0
+                self.loop_start_time = None
+                return py_trees.common.Status.SUCCESS
         else:
             self.node.get_logger().error(f'❌ Gesture "{self.gesture_name}" failed')
             self.publish_status(f"completed_{self.gesture_name}_failed", False)
-            # Reset state to be ready for next gesture
+            # Always stop on failure
             self.gesture_name = None
             self.running = False
+            self.loop_mode = False
+            self.loop_count = 0
+            self.loop_start_time = None
             return py_trees.common.Status.FAILURE
 
     def start_gesture_execution(self):
@@ -233,6 +322,29 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
         self.publish_status(f"starting_{self.gesture_name}", True)
 
         try:
+            # Load gesture config to check for loop parameters
+            gesture_config = self.load_gesture_config(self.gesture_name)
+            if gesture_config is None:
+                self.execution_started = True
+                self.execution_complete = True
+                self.execution_success = False
+                return py_trees.common.Status.RUNNING
+
+            # Read loop parameters from YAML (only if not already controlled via topic)
+            if not hasattr(self, '_loop_set_by_topic') or not self._loop_set_by_topic:
+                yaml_loop_mode = gesture_config.get('loop', False)
+                yaml_loop_count = gesture_config.get('loop_count', None)
+                yaml_loop_timeout = gesture_config.get('loop_timeout', 300.0)  # Default 5 minutes
+
+                if yaml_loop_mode and not self.loop_mode:
+                    self.loop_mode = True
+                    self.loop_max_count = yaml_loop_count  # Can be None (infinite)
+                    self.loop_timeout = yaml_loop_timeout
+                    if self.loop_start_time is None:
+                        self.loop_start_time = time.time()
+                        self.loop_count = 0
+                    self.node.get_logger().info(f'📄 YAML loop config: enabled, max_count={yaml_loop_count}, timeout={yaml_loop_timeout}s')
+
             # Try to load cached trajectory first
             trajectory = self.load_trajectory_cache(self.gesture_name)
 
@@ -242,14 +354,6 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
             else:
                 # No cached trajectory - compute it
                 self.node.get_logger().info(f'🔧 Computing new trajectory...')
-
-                # Load gesture from YAML
-                gesture_config = self.load_gesture_config(self.gesture_name)
-                if gesture_config is None:
-                    self.execution_started = True
-                    self.execution_complete = True
-                    self.execution_success = False
-                    return py_trees.common.Status.RUNNING
 
                 # Check control mode (default to 'cartesian' for backward compatibility)
                 control_mode = gesture_config.get('control_mode', 'cartesian')
