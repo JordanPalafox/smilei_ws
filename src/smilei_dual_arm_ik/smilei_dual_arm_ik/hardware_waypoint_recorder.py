@@ -413,26 +413,55 @@ class HardwareWaypointRecorder(Node):
             }
             yaml_data['left_arm_waypoints'].append(left_entry)
 
-        # Create output file path
-        output_file = os.path.join(self.output_directory, f'{gesture_name}.yaml')
+        # Save to both install and source directories
+        saved_count = 0
+        saved_files = []
 
-        # Ensure output directory exists
-        os.makedirs(self.output_directory, exist_ok=True)
-
-        # Write to file
+        # 1. Save to install directory (for immediate use)
+        install_file = os.path.join(self.output_directory, f'{gesture_name}.yaml')
         try:
-            with open(output_file, 'w') as f:
+            os.makedirs(self.output_directory, exist_ok=True)
+            with open(install_file, 'w') as f:
                 yaml.dump(yaml_data, f, default_flow_style=False, sort_keys=False)
+            saved_files.append(install_file)
+            saved_count += 1
+            self.get_logger().info(f'💾 Saved to install: {install_file}')
+        except Exception as e:
+            self.get_logger().error(f'Failed to save to install directory: {e}')
 
-            self.get_logger().info(f'✅ Exported {len(self.waypoints)} waypoints in JOINT MODE to:')
-            self.get_logger().info(f'   {output_file}')
+        # 2. Save to source directory (for version control and persistence)
+        # Convert install path to source path
+        if '/install/' in self.output_directory:
+            source_gestures_dir = self.output_directory.replace('/install/', '/src/').replace('/share/smilei_dual_arm_ik/', '/')
+            source_file = os.path.join(source_gestures_dir, f'{gesture_name}.yaml')
+
+            try:
+                # Ensure source directory exists
+                os.makedirs(source_gestures_dir, exist_ok=True)
+
+                with open(source_file, 'w') as f:
+                    yaml.dump(yaml_data, f, default_flow_style=False, sort_keys=False)
+                saved_files.append(source_file)
+                saved_count += 1
+                self.get_logger().info(f'💾 Saved to source: {source_file}')
+            except Exception as e:
+                self.get_logger().warning(f'Failed to save to source directory: {e}')
+
+        # Summary
+        if saved_count > 0:
+            self.get_logger().info('')
+            self.get_logger().info('='*60)
+            self.get_logger().info(f'✅ Exported {len(self.waypoints)} waypoints in JOINT MODE')
+            self.get_logger().info(f'   Gesture: {gesture_name}')
+            self.get_logger().info(f'   Files saved: {saved_count}')
+            for f in saved_files:
+                self.get_logger().info(f'     - {f}')
             self.get_logger().info(f'   Control Mode: joint (direct joint angle control)')
             self.get_logger().info(f'   Motor Mode: Position control (mode 2)')
             self.get_logger().info('='*60)
             self.get_logger().info('')
-
-        except Exception as e:
-            self.get_logger().error(f'Failed to export waypoints: {e}')
+        else:
+            self.get_logger().error('Failed to save gesture to any directory!')
 
     def interpolate_and_visualize(self):
         """Interpolate trajectories between waypoints and visualize"""
