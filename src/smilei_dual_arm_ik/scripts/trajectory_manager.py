@@ -10,7 +10,7 @@ Keyboard Controls:
 - R: Rename a trajectory file
 - D: Delete a trajectory file
 - C: Clear all trajectory cache files
-- ESC: Exit
+- Q: Quit/Exit
 """
 
 import os
@@ -223,7 +223,7 @@ class TrajectoryManager:
         print("  R - Rename a trajectory file")
         print("  D - Delete a trajectory file")
         print("  C - Clear all trajectory cache files")
-        print("  ESC - Exit")
+        print("  Q - Quit/Exit")
         print("-" * 60)
         print("Press a key...")
 
@@ -234,7 +234,7 @@ class TrajectoryManager:
         while True:
             key = self.get_key()
 
-            if key == '\x1b':  # ESC key
+            if key.lower() == 'q' or key == '\x1b':  # Q or ESC key
                 print("\n👋 Exiting Trajectory Manager...")
                 break
 
@@ -255,7 +255,7 @@ class TrajectoryManager:
                 self.show_menu()
 
             else:
-                print(f"\n⚠️  Unknown key: '{key}' - Use L/R/D/C/ESC")
+                print(f"\n⚠️  Unknown key: '{key}' - Use L/R/D/C/Q")
                 self.show_menu()
 
 
