@@ -122,7 +122,16 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
         self.trajectory_planner = TrajectoryPlannerDualArm()
 
         # Set gestures and trajectories directories
-        self.gestures_directory = os.path.join(pkg_share, 'config', 'gestures')
+        # For gestures: prioritize source directory for fast development, fallback to install
+        source_gestures_dir = os.path.expanduser('~/smilei_ws/src/smilei_dual_arm_ik/config/gestures')
+        if os.path.exists(source_gestures_dir):
+            self.gestures_directory = source_gestures_dir
+            self.node.get_logger().info(f'📂 Using SOURCE gestures directory: {source_gestures_dir}')
+        else:
+            self.gestures_directory = os.path.join(pkg_share, 'config', 'gestures')
+            self.node.get_logger().info(f'📂 Using INSTALL gestures directory: {self.gestures_directory}')
+
+        # For trajectories: use install directory (cache is temporary, doesn't need version control)
         self.trajectories_directory = os.path.join(pkg_share, 'config', 'trajectories')
 
         # Create trajectories directory if it doesn't exist
@@ -355,32 +364,23 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
                 # No cached trajectory - compute it
                 self.node.get_logger().info(f'🔧 Computing new trajectory...')
 
-                # Check control mode (default to 'cartesian' for backward compatibility)
+                # Check waypoint format (default to 'cartesian' for backward compatibility)
+                # Note: control_mode refers to WAYPOINT FORMAT, not motor control method
+                # Both modes ultimately generate joint angle setpoints and use motor's internal PID control
                 control_mode = gesture_config.get('control_mode', 'cartesian')
-                self.node.get_logger().info(f'🎮 Control Mode: {control_mode.upper()}')
+                self.node.get_logger().info(f'📋 Waypoint Format: {control_mode.upper()}')
 
-                # Branch based on control mode
+                # Branch based on waypoint format
                 if control_mode == 'joint':
-                    # JOINT MODE: Extract joint angles directly (no IK needed)
-                    self.node.get_logger().info('📐 Joint mode - extracting joint angles directly')
-
-                    # Configure motors for position control mode (mode 2)
-                    if not self.configure_motors_for_position_mode():
-                        self.node.get_logger().error('Failed to configure motors for position mode')
-                        self.execution_started = True
-                        self.execution_complete = True
-                        self.execution_success = False
-                        return py_trees.common.Status.RUNNING
+                    # JOINT FORMAT: Waypoints contain joint angles directly (no IK needed)
+                    self.node.get_logger().info('📐 Extracting joint angles directly from waypoints')
 
                     # Extract joint angles from gesture config
                     right_angles, left_angles = self.extract_joint_angles_from_gesture(gesture_config)
 
                 elif control_mode == 'cartesian':
-                    # CARTESIAN MODE: Solve IK to convert cartesian waypoints to joint angles
-                    self.node.get_logger().info('🗺️  Cartesian mode - solving IK for waypoints')
-
-                    # Note: For cartesian mode, motors should use position control (set_goal_position)
-                    # No special motor configuration needed - uses default mode
+                    # CARTESIAN FORMAT: Waypoints contain cartesian positions (need IK to get joint angles)
+                    self.node.get_logger().info('🗺️  Solving IK to convert cartesian waypoints to joint angles')
 
                     # Solve IK for waypoints
                     right_angles, left_angles = self.solve_ik_for_gesture(gesture_config)

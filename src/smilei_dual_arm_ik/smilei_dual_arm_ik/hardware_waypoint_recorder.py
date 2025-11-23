@@ -370,7 +370,7 @@ class HardwareWaypointRecorder(Node):
         self.publish_waypoint_markers()
 
     def export_waypoints(self):
-        """Export waypoints to YAML file in joint mode format"""
+        """Export waypoints to YAML file in joint format"""
         if len(self.waypoints) == 0:
             self.get_logger().warn('No waypoints to export!')
             return
@@ -378,18 +378,18 @@ class HardwareWaypointRecorder(Node):
         # Ask for gesture name
         self.get_logger().info('')
         self.get_logger().info('='*60)
-        self.get_logger().info('Export Waypoints to YAML (Joint Mode)')
+        self.get_logger().info('Export Waypoints to YAML (Joint Format)')
         self.get_logger().info('='*60)
 
         # For now, use timestamp as default name
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         gesture_name = f'recorded_gesture_{timestamp}'
 
-        # Prepare YAML data structure for JOINT MODE
+        # Prepare YAML data structure for JOINT FORMAT
         # This format is compatible with the autonomous_gesture_execution behavior
         yaml_data = {
             'gesture_name': gesture_name,
-            'control_mode': 'joint',  # NEW: Specify joint mode
+            'control_mode': 'joint',  # Waypoint format: joint (waypoints contain joint angles directly)
             'recorded': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'num_waypoints': len(self.waypoints),
             'synchronized': True,  # Execute both arms in sync
@@ -451,13 +451,13 @@ class HardwareWaypointRecorder(Node):
         if saved_count > 0:
             self.get_logger().info('')
             self.get_logger().info('='*60)
-            self.get_logger().info(f'✅ Exported {len(self.waypoints)} waypoints in JOINT MODE')
+            self.get_logger().info(f'✅ Exported {len(self.waypoints)} waypoints in JOINT FORMAT')
             self.get_logger().info(f'   Gesture: {gesture_name}')
             self.get_logger().info(f'   Files saved: {saved_count}')
             for f in saved_files:
                 self.get_logger().info(f'     - {f}')
-            self.get_logger().info(f'   Control Mode: joint (direct joint angle control)')
-            self.get_logger().info(f'   Motor Mode: Position control (mode 2)')
+            self.get_logger().info(f'   Waypoint Format: joint (waypoints contain joint angles directly)')
+            self.get_logger().info(f'   Execution: Uses motor\'s internal PID control via set_goal_position()')
             self.get_logger().info('='*60)
             self.get_logger().info('')
         else:
