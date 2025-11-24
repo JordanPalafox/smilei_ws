@@ -301,6 +301,9 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
             except Exception as e:
                 self.node.get_logger().error(f'Error sending zero currents: {e}')
 
+            # Restore position control mode
+            self.restore_position_control()
+
     def publish_status(self, status, is_executing):
         """Publish execution status"""
         if self.status_pub:
@@ -319,6 +322,14 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
             self.node.get_logger().info(f'🚀 Starting gesture: {self.gesture_name}')
             self.running = True
             self.publish_status(f"starting_{self.gesture_name}", True)
+
+            # Setup motors for current control mode
+            if not self.setup_current_control():
+                self.node.get_logger().error('Failed to setup current control mode')
+                self.execution_started = True
+                self.execution_complete = True
+                self.execution_success = False
+                return py_trees.common.Status.RUNNING
 
             # Load gesture configuration
             gesture_config = self.load_gesture_config(self.gesture_name)
@@ -743,6 +754,64 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
             currents.append(current)
 
         return currents
+
+    def setup_current_control(self):
+        """
+        Setup motors for current control mode.
+        Based on remote_teleoperation.py setup_current_control().
+        """
+        try:
+            if not self.hardware_manager:
+                self.node.get_logger().info('[SIM] Setting up current control mode')
+                return True
+
+            self.node.get_logger().info('⚙️ Configuring motors for CURRENT CONTROL mode...')
+
+            for motor_id in self.motor_ids:
+                # Set PID gains for current control (from remote_teleoperation.py)
+                self.hardware_manager.set_p_gain_iq((motor_id, 0.277))
+                self.hardware_manager.set_i_gain_iq((motor_id, 0.061))
+                self.hardware_manager.set_d_gain_iq((motor_id, 0))
+                self.hardware_manager.set_p_gain_id((motor_id, 0.277))
+                self.hardware_manager.set_i_gain_id((motor_id, 0.061))
+                self.hardware_manager.set_d_gain_id((motor_id, 0))
+
+                # Set to current mode (mode 0)
+                self.hardware_manager.set_mode((motor_id, 0))
+
+                # Enable torque
+                self.hardware_manager.set_torque_enable((motor_id, 1))
+
+            self.node.get_logger().info('✅ Motors configured for current control (mode 0)')
+            return True
+
+        except Exception as e:
+            self.node.get_logger().error(f'Error setting up current control: {e}')
+            return False
+
+    def restore_position_control(self):
+        """
+        Restore position control mode after current control execution.
+        Based on remote_teleoperation.py restore_position_control().
+        """
+        try:
+            if not self.hardware_manager:
+                self.node.get_logger().info('[SIM] Restoring position control mode')
+                return
+
+            self.node.get_logger().info('⚙️ Restoring POSITION CONTROL mode...')
+
+            # Restore PID gains for position control
+            if hasattr(self.hardware_manager, 'configure_pid_gains'):
+                self.hardware_manager.configure_pid_gains(self.motor_ids, p_gain=5.0, i_gain=0.0, d_gain=0.2)
+
+            # Change to position mode (mode 2)
+            self.hardware_manager.set_mode(*[(motor_id, 2) for motor_id in self.motor_ids])
+
+            self.node.get_logger().info('✅ Motors restored to position control (mode 2)')
+
+        except Exception as e:
+            self.node.get_logger().error(f'Error restoring position control: {e}')
 
     def send_zero_currents(self):
         """Send zero currents to all motors"""
