@@ -11,6 +11,7 @@ from smilei_state_machine.behaviors.local_teleoperation import LocalTeleoperatio
 from smilei_state_machine.behaviors.remote_teleoperation import RemoteTeleoperation
 from smilei_state_machine.behaviors.disable_robot import DisableRobot
 from smilei_state_machine.behaviors.autonomous_gesture_execution import AutonomousGestureExecution
+from smilei_state_machine.behaviors.autonomous_gesture_current_control import AutonomousGestureCurrentControl
 from smilei_state_machine.hardware_manager import HardwareManager
 
 # Variable global para almacenar el comando actual
@@ -262,6 +263,7 @@ def main():
     remote_teleoperation = RemoteTeleoperation(name="RemoteTeleoperation", motor_ids=motor_ids, node=node, hardware_manager=hardware_manager)
     disable = DisableRobot(name="DisableRobot", motor_ids=motor_ids, node=node, hardware_manager=hardware_manager)
     autonomous_gesture = AutonomousGestureExecution(name="AutonomousGestureExecution", motor_ids=motor_ids, node=node, hardware_manager=hardware_manager)
+    autonomous_gesture_current = AutonomousGestureCurrentControl(name="AutonomousGestureCurrentControl", node=node, hardware_manager=hardware_manager)
 
     # Crear comportamiento raíz personalizado
     root = StateMachineRoot()
@@ -277,6 +279,7 @@ def main():
     root.add_state("remote_teleoperation", remote_teleoperation)
     root.add_state("disable", disable)
     root.add_state("autonomous_gesture", autonomous_gesture)
+    root.add_state("autonomous_gesture_current", autonomous_gesture_current)
 
     # Crear el árbol de comportamiento
     tree = py_trees.trees.BehaviourTree(root)
