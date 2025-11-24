@@ -98,9 +98,9 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
         self.current_velocities = [0.0] * 8
         self.target_positions = [0.0] * 8
 
-        # Control loop timing
-        self.control_frequency = 100.0  # Hz - moderate frequency to avoid USB issues
-        self.control_period = 1.0 / self.control_frequency
+        # Control loop timing (matching remote_teleoperation behavior)
+        self.waypoint_duration = 1.0  # seconds per waypoint (slower for testing)
+        self.min_control_period = 0.002  # minimum time between control iterations (500Hz max)
 
     def setup(self):
         """Initialize the behavior"""
@@ -612,6 +612,7 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
         """
         Execute trajectory using PD current control.
         ALL hardware access is done sequentially in this function to avoid USB serial racing.
+        Based on remote_teleoperation.py control loop behavior.
         """
         if not self.hardware_manager:
             self.node.get_logger().warning('[SIM] Would execute trajectory with current control')
@@ -625,18 +626,32 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
         total_points = max(len(right_traj), len(left_traj))
 
         self.node.get_logger().info(f'▶️ Executing trajectory with CURRENT CONTROL: {total_points} points')
-        self.node.get_logger().info(f'⚡ Control frequency: {self.control_frequency}Hz')
+        self.node.get_logger().info(f'⏱️ Duration per waypoint: {self.waypoint_duration}s')
 
-        # Initialize velocity estimators
-        self.theta_estimators = [0.0] * 8
-        self.vel_estimators = [0.0] * 8
+        # Initialize velocity estimators and get initial motor state
+        try:
+            positions = self.hardware_manager.get_present_position(*self.motor_ids)
+            velocities = self.hardware_manager.get_present_velocity(*self.motor_ids)
+
+            if len(positions) == 8 and len(velocities) == 8:
+                self.current_positions = positions[:]
+                self.current_velocities = velocities[:]
+                # Initialize estimators with current state
+                self.theta_estimators = [0.0] * 8
+                self.vel_estimators = velocities[:]  # Start with actual velocities
+                self.node.get_logger().info(f'📍 Initial positions: {[f"{p:.3f}" for p in positions]}')
+            else:
+                self.node.get_logger().error('Failed to get initial motor states')
+                return False
+        except Exception as e:
+            self.node.get_logger().error(f'Error getting initial state: {e}')
+            return False
 
         try:
             for i in range(total_points):
                 # Check if execution was stopped
                 if not self.running:
                     self.node.get_logger().warning('⏹️ Execution stopped by user command')
-                    # Send zero currents before stopping
                     self.send_zero_currents()
                     return False
 
@@ -651,36 +666,45 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
                     if j < len(left_angles):
                         self.target_positions[j + 4] = left_angles[j]  # Motors 5-8
 
-                # Control loop for this waypoint - run at control_frequency
-                waypoint_start_time = time.time()
-                iterations_per_waypoint = int(self.control_frequency * 0.05)  # 0.05s per waypoint
+                # Log target for first and every 10th waypoint
+                if i == 0 or i % 10 == 0:
+                    self.node.get_logger().info(f'🎯 Waypoint {i}/{total_points}: targets = {[f"{t:.3f}" for t in self.target_positions]}')
 
-                for iteration in range(iterations_per_waypoint):
+                # Control loop for this waypoint - keep trying until duration expires
+                waypoint_start_time = time.time()
+                iteration_count = 0
+
+                while (time.time() - waypoint_start_time) < self.waypoint_duration:
+                    if not self.running:
+                        break
+
                     iteration_start = time.time()
 
                     # SEQUENTIAL HARDWARE ACCESS - all in one place to avoid racing
                     success = self.hardware_control_step()
                     if not success:
-                        self.node.get_logger().error('Hardware control step failed')
-                        self.send_zero_currents()
-                        return False
+                        self.node.get_logger().warning(f'Hardware control step failed at waypoint {i}, iteration {iteration_count}')
+                        # Continue instead of failing completely
+
+                    iteration_count += 1
 
                     # Allow ROS2 to process callbacks
                     rclpy.spin_once(self.node, timeout_sec=0.0001)
 
-                    # Timing - maintain control frequency
+                    # Minimal delay to avoid overwhelming USB
                     elapsed = time.time() - iteration_start
-                    sleep_time = self.control_period - elapsed
-                    if sleep_time > 0:
-                        time.sleep(sleep_time)
+                    if elapsed < self.min_control_period:
+                        time.sleep(self.min_control_period - elapsed)
 
-                # Log progress
-                if i % 10 == 0:
+                # Log progress with iteration count
+                if i % 5 == 0:
                     progress = (i / total_points) * 100
-                    self.node.get_logger().info(f'📊 Progress: {progress:.1f}%')
+                    self.node.get_logger().info(f'📊 Progress: {progress:.1f}% (waypoint {i}, {iteration_count} control iterations)')
 
         except Exception as e:
             self.node.get_logger().error(f'Error during trajectory execution: {e}')
+            import traceback
+            self.node.get_logger().error(traceback.format_exc())
             self.send_zero_currents()
             return False
 
@@ -701,6 +725,7 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
             velocities = self.hardware_manager.get_present_velocity(*self.motor_ids)
 
             if len(positions) != 8 or len(velocities) != 8:
+                self.node.get_logger().warning(f'Invalid state: got {len(positions)} positions, {len(velocities)} velocities')
                 return False
 
             self.current_positions = positions[:]
@@ -708,6 +733,24 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
 
             # STEP 2: Calculate control currents using PD control law
             currents = self.calculate_control_currents()
+
+            # Debug logging every 50 iterations
+            if not hasattr(self, '_control_step_count'):
+                self._control_step_count = 0
+            self._control_step_count += 1
+
+            if self._control_step_count % 50 == 0:
+                # Log state for first 2 motors as example
+                for i in range(2):
+                    motor_id = self.motor_ids[i]
+                    pos = positions[i]
+                    target = self.target_positions[i]
+                    error = pos - target
+                    current = currents[i]
+                    self.node.get_logger().info(
+                        f'M{motor_id}: pos={pos:.3f}, target={target:.3f}, '
+                        f'error={error:.3f}, current={current:.3f}A'
+                    )
 
             # STEP 3: Send current commands (1 USB transaction)
             current_pairs = [(motor_id, currents[idx]) for idx, motor_id in enumerate(self.motor_ids)]
@@ -717,6 +760,8 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
 
         except Exception as e:
             self.node.get_logger().error(f'Hardware control step error: {e}')
+            import traceback
+            self.node.get_logger().error(traceback.format_exc())
             return False
 
     def calculate_control_currents(self):
