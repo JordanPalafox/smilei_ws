@@ -673,6 +673,11 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
         self.node.get_logger().info(f'▶️ Executing trajectory: {total_points} points')
 
         for i in range(total_points):
+            # Check if execution was stopped via topic
+            if not self.running:
+                self.node.get_logger().warning('⏹️ Execution stopped by user command')
+                return False
+
             # Get current joint angles
             right_angles = right_traj[min(i, len(right_traj) - 1)]
             left_angles = left_traj[min(i, len(left_traj) - 1)]
@@ -703,8 +708,12 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
                 progress = (i / total_points) * 100
                 self.node.get_logger().info(f'📊 Progress: {progress:.1f}%')
 
-            # Small delay between points
-            time.sleep(0.05)  # 50ms between waypoints
+            # Timing: allow ROS2 to process callbacks while waiting
+            # This maintains responsiveness to new gesture commands
+            start_time = time.time()
+            while time.time() - start_time < 0.05:  # 50ms between waypoints
+                rclpy.spin_once(self.node, timeout_sec=0.001)  # Process callbacks for 1ms
+                time.sleep(0.001)  # Small sleep to prevent CPU spinning
 
         self.node.get_logger().info('✅ Trajectory execution complete')
         return True
