@@ -73,6 +73,7 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
         self.execution_complete = False
         self.execution_success = False
         self.running = False
+        self._success_logged = False  # Flag to log success only once
 
         # Behavior activation state (separate from gesture execution state)
         self.is_active = False  # True when behavior is in active state, False otherwise
@@ -191,6 +192,7 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
             self.execution_started = False
             self.execution_complete = False
             self.execution_success = False
+            self._success_logged = False
             self.running = True
         else:
             self.node.get_logger().info(f'💤 Behavior inactive - gesture ignored')
@@ -247,6 +249,7 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
         self.execution_started = False
         self.execution_complete = False
         self.execution_success = False
+        self._success_logged = False
         self.running = True
 
         # Publish initial status
@@ -269,8 +272,11 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
 
         # Execution complete - check if we should loop or finish
         if self.execution_success:
-            self.node.get_logger().info(f'✅ Gesture "{self.gesture_name}" executed successfully!')
-            self.publish_status(f"completed_{self.gesture_name}_success", False)
+            # Log success only once
+            if not self._success_logged:
+                self.node.get_logger().info(f'✅ Gesture "{self.gesture_name}" executed successfully!')
+                self.publish_status(f"completed_{self.gesture_name}_success", False)
+                self._success_logged = True
 
             # Check if we should loop
             if self.loop_mode:
@@ -304,6 +310,7 @@ class AutonomousGestureExecution(py_trees.behaviour.Behaviour):
                 self.execution_started = False
                 self.execution_complete = False
                 self.execution_success = False
+                self._success_logged = False  # Reset for next iteration
 
                 # Return RUNNING to continue the loop
                 return py_trees.common.Status.RUNNING
