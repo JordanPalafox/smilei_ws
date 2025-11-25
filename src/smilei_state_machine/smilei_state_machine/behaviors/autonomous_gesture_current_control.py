@@ -105,9 +105,9 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
         self.time_per_point = 0.025  # will be calculated dynamically based on total_duration
 
         # Smooth transition parameters
-        self.transition_threshold = 0.15  # radians (~8.6 degrees) - threshold to trigger transition
-        self.transition_points = 15  # number of interpolation points for smooth transition
-        self.transition_duration = 1.5  # seconds for transition between gestures
+        self.transition_threshold = 0.05  # radians (~2.8 degrees) - threshold to trigger transition
+        self.transition_points = 30  # number of interpolation points for smooth transition
+        self.transition_duration = 0.5  # seconds for transition between gestures
 
         # Loop mode hold duration (time to hold position between loop iterations)
         self.loop_hold_duration = 0.1  # seconds to hold final position before restarting in loop mode
