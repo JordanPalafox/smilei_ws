@@ -334,6 +334,7 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
         try:
             self.node.get_logger().info(f'🚀 Starting gesture: {self.gesture_name}')
             self.running = True
+            self.execution_started = True  # Mark as started at the beginning
             self.publish_status(f"starting_{self.gesture_name}", True)
 
             # Setup motors for current control mode
@@ -457,19 +458,16 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
             # Execute trajectory using current control
             success = self.execute_trajectory_with_current_control(trajectory)
 
-            self.execution_started = True
-
-            # Only mark as complete if execution actually finished
-            # If success is False and execution_started is also False, it means
-            # a new gesture arrived during holding - don't mark as complete
+            # Check if execution was interrupted by new gesture
+            # (callback would have set execution_started = False)
             if not success and not self.execution_started:
                 # New gesture pending - don't mark as complete, allow restart
                 self.node.get_logger().info('🔄 Holding interrupted by new gesture - ready to restart')
                 return py_trees.common.Status.RUNNING
-            else:
-                # Normal completion (success or failure)
-                self.execution_complete = True
-                self.execution_success = success
+
+            # Normal completion (success or failure) - mark as complete
+            self.execution_complete = True
+            self.execution_success = success
 
         except Exception as e:
             self.node.get_logger().error(f'Error during gesture execution: {e}')
