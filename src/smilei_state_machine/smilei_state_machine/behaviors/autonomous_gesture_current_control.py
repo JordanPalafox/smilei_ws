@@ -104,6 +104,11 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
         self.min_control_period = 0.010  # minimum time between control iterations (100Hz max) - reduced to avoid USB overload
         self.time_per_point = 0.025  # will be calculated dynamically based on total_duration
 
+        # Smooth transition parameters
+        self.transition_threshold = 0.15  # radians (~8.6 degrees) - threshold to trigger transition
+        self.transition_points = 15  # number of interpolation points for smooth transition
+        self.transition_duration = 1.5  # seconds for transition between gestures
+
     def setup(self):
         """Initialize the behavior"""
         if self.node is None:
@@ -659,8 +664,7 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
         total_duration = getattr(self, 'gesture_total_duration', self.default_total_duration)
         self.time_per_point = total_duration / max(total_points, 1)  # Avoid division by zero
 
-        self.node.get_logger().info(f'▶️ Executing trajectory with CURRENT CONTROL: {total_points} points')
-        self.node.get_logger().info(f'⏱️ Total duration: {total_duration}s | Time per point: {self.time_per_point*1000:.1f}ms')
+        self.node.get_logger().info(f'▶️ Starting trajectory execution with CURRENT CONTROL')
 
         # Initialize velocity estimators and get initial motor state
         try:
@@ -680,6 +684,72 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
         except Exception as e:
             self.node.get_logger().error(f'Error getting initial state: {e}')
             return False
+
+        # Check if smooth transition is needed from current position to first trajectory point
+        first_right = right_traj[0] if len(right_traj) > 0 else None
+        first_left = left_traj[0] if len(left_traj) > 0 else None
+
+        if first_right is not None and first_left is not None:
+            # Calculate maximum position error between current and first target
+            max_position_error = 0.0
+            for i in range(4):
+                if i < len(first_right):
+                    error_right = abs(self.current_positions[i] - first_right[i])
+                    max_position_error = max(max_position_error, error_right)
+                if i < len(first_left):
+                    error_left = abs(self.current_positions[i + 4] - first_left[i])
+                    max_position_error = max(max_position_error, error_left)
+
+            # If error exceeds threshold, add smooth transition
+            if max_position_error > self.transition_threshold:
+                self.node.get_logger().info(
+                    f'🔄 Transition needed: max error {max_position_error:.3f} rad ({max_position_error*57.3:.1f}°) '
+                    f'> threshold {self.transition_threshold:.3f} rad'
+                )
+
+                # Current positions as numpy arrays
+                current_right = np.array(self.current_positions[0:4])
+                current_left = np.array(self.current_positions[4:8])
+
+                # Generate smooth transition points using linear interpolation
+                transition_right = []
+                transition_left = []
+
+                for i in range(1, self.transition_points + 1):
+                    alpha = i / self.transition_points  # 0 to 1
+                    trans_right = current_right + alpha * (first_right - current_right)
+                    trans_left = current_left + alpha * (first_left - current_left)
+                    transition_right.append(trans_right)
+                    transition_left.append(trans_left)
+
+                # Insert transition at beginning of trajectory
+                right_traj = transition_right + right_traj
+                left_traj = transition_left + left_traj
+                total_points = max(len(right_traj), len(left_traj))
+
+                # Recalculate time per point accounting for transition time
+                # Transition gets its own time budget, rest gets gesture time
+                gesture_points = total_points - self.transition_points
+                total_time = self.transition_duration + total_duration
+
+                self.node.get_logger().info(
+                    f'✅ Added {self.transition_points} transition points '
+                    f'({self.transition_duration}s transition + {total_duration}s gesture = {total_time}s total)'
+                )
+
+                # Update timing: we'll handle transition and gesture timing separately in the loop
+                self.time_per_point = total_time / total_points
+            else:
+                self.node.get_logger().info(
+                    f'✓ No transition needed: max error {max_position_error:.3f} rad ({max_position_error*57.3:.1f}°) '
+                    f'< threshold {self.transition_threshold:.3f} rad'
+                )
+
+        # Log final trajectory info after potential transition additions
+        self.node.get_logger().info(
+            f'📊 Executing {total_points} trajectory points | '
+            f'Time per point: {self.time_per_point*1000:.1f}ms'
+        )
 
         try:
             for i in range(total_points):
