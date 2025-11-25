@@ -109,6 +109,9 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
         self.transition_points = 15  # number of interpolation points for smooth transition
         self.transition_duration = 1.5  # seconds for transition between gestures
 
+        # Loop mode hold duration (time to hold position between loop iterations)
+        self.loop_hold_duration = 0.1  # seconds to hold final position before restarting in loop mode
+
     def setup(self):
         """Initialize the behavior"""
         if self.node is None:
@@ -802,20 +805,36 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
             return False
 
         # Hold final position with CURRENT CONTROL (don't switch to position control)
-        self.node.get_logger().info(
-            f'🔒 Holding final position with current control: {[f"{p:.3f}" for p in self.target_positions]}'
-        )
+        if self.loop_mode:
+            self.node.get_logger().info(
+                f'🔒 Holding final position with current control for {self.loop_hold_duration}s before loop restart: {[f"{p:.3f}" for p in self.target_positions]}'
+            )
+        else:
+            self.node.get_logger().info(
+                f'🔒 Holding final position with current control: {[f"{p:.3f}" for p in self.target_positions]}'
+            )
 
         # Keep the current control loop active with fixed targets until:
         # - New gesture arrives (execution_started becomes False via callback)
         # - Behavior is terminated (running becomes False)
+        # - Loop mode: hold duration elapsed (time to restart gesture)
         hold_iteration = 0
+        hold_start_time = time.time()
         new_gesture_pending = False
+        loop_restart_needed = False
 
         try:
             # Hold while no new gesture is pending and still running
             while self.running and self.execution_started:
                 iteration_start = time.time()
+
+                # Check if loop mode and hold duration elapsed
+                if self.loop_mode:
+                    hold_elapsed = time.time() - hold_start_time
+                    if hold_elapsed >= self.loop_hold_duration:
+                        self.node.get_logger().info(f'🔄 Loop hold duration ({self.loop_hold_duration}s) elapsed - restarting gesture')
+                        loop_restart_needed = True
+                        break
 
                 # Continue hardware control with fixed target positions
                 success = self.hardware_control_step()
@@ -827,9 +846,15 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
 
                 # Log holding status every 5 seconds
                 if hold_iteration % 500 == 0:  # 500 iterations × 10ms = 5 seconds
-                    self.node.get_logger().info(
-                        f'💤 Still holding position (current control active, {hold_iteration} iterations)'
-                    )
+                    hold_elapsed = time.time() - hold_start_time
+                    if self.loop_mode:
+                        self.node.get_logger().info(
+                            f'💤 Holding position in loop mode ({hold_elapsed:.1f}/{self.loop_hold_duration}s, {hold_iteration} iterations)'
+                        )
+                    else:
+                        self.node.get_logger().info(
+                            f'💤 Still holding position (current control active, {hold_iteration} iterations)'
+                        )
 
                 # Allow ROS2 to process callbacks (including new gesture commands)
                 rclpy.spin_once(self.node, timeout_sec=0.0001)
@@ -846,12 +871,17 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
             return False
 
         # Check why we exited holding mode
-        if not self.execution_started:
+        if loop_restart_needed:
+            # Loop mode: hold duration elapsed
+            # Return True to mark as complete - update() will handle loop restart with safety checks
+            self.node.get_logger().info(f'🔁 Loop hold complete - returning to update() for restart')
+            return True
+        elif not self.execution_started:
             # New gesture arrived (callback set execution_started = False)
             self.node.get_logger().info(f'🔄 New gesture "{self.gesture_name}" pending - exiting hold mode')
             new_gesture_pending = True
         elif not self.running:
-            # Termination requested
+            # Termination requested (could be stop command)
             self.node.get_logger().info('⏹️ Termination requested - exiting hold mode')
 
         # Return False if new gesture is pending (don't mark current gesture as complete)
