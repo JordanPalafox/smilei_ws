@@ -458,8 +458,18 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
             success = self.execute_trajectory_with_current_control(trajectory)
 
             self.execution_started = True
-            self.execution_complete = True
-            self.execution_success = success
+
+            # Only mark as complete if execution actually finished
+            # If success is False and execution_started is also False, it means
+            # a new gesture arrived during holding - don't mark as complete
+            if not success and not self.execution_started:
+                # New gesture pending - don't mark as complete, allow restart
+                self.node.get_logger().info('🔄 Holding interrupted by new gesture - ready to restart')
+                return py_trees.common.Status.RUNNING
+            else:
+                # Normal completion (success or failure)
+                self.execution_complete = True
+                self.execution_success = success
 
         except Exception as e:
             self.node.get_logger().error(f'Error during gesture execution: {e}')
@@ -799,13 +809,14 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
         )
 
         # Keep the current control loop active with fixed targets until:
-        # - New gesture arrives (gesture_name changes)
+        # - New gesture arrives (execution_started becomes False via callback)
         # - Behavior is terminated (running becomes False)
-        current_gesture_name = self.gesture_name
         hold_iteration = 0
+        new_gesture_pending = False
 
         try:
-            while self.running and self.gesture_name == current_gesture_name:
+            # Hold while no new gesture is pending and still running
+            while self.running and self.execution_started:
                 iteration_start = time.time()
 
                 # Continue hardware control with fixed target positions
@@ -836,13 +847,21 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
             self.node.get_logger().error(traceback.format_exc())
             return False
 
-        # Exiting holding mode (new gesture arrived or termination requested)
-        if self.gesture_name != current_gesture_name:
-            self.node.get_logger().info(f'🔄 New gesture "{self.gesture_name}" requested - exiting hold mode')
-        else:
+        # Check why we exited holding mode
+        if not self.execution_started:
+            # New gesture arrived (callback set execution_started = False)
+            self.node.get_logger().info(f'🔄 New gesture "{self.gesture_name}" pending - exiting hold mode')
+            new_gesture_pending = True
+        elif not self.running:
+            # Termination requested
             self.node.get_logger().info('⏹️ Termination requested - exiting hold mode')
 
-        return True
+        # Return False if new gesture is pending (don't mark current gesture as complete)
+        # This allows update() to restart execution with the new gesture
+        if new_gesture_pending:
+            return False  # Don't mark as complete - new gesture needs to execute
+        else:
+            return True  # Normal completion or termination
 
     def hardware_control_step(self):
         """
