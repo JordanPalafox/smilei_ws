@@ -300,17 +300,36 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
         self.is_active = False
         self.running = False
 
-        # Send zero currents to stop motors
         if self.hardware_manager:
-            try:
-                zero_currents = [(motor_id, 0.0) for motor_id in self.motor_ids]
-                self.hardware_manager.set_goal_iq(*zero_currents)
-                self.node.get_logger().info('⏹️ Sent zero currents to all motors')
-            except Exception as e:
-                self.node.get_logger().error(f'Error sending zero currents: {e}')
+            # Check if we have valid target positions from a completed gesture
+            has_valid_targets = any(pos != 0.0 for pos in self.target_positions)
 
-            # Restore position control mode
-            self.restore_position_control()
+            if has_valid_targets:
+                # Maintain last gesture position
+                self.node.get_logger().info('🔒 Maintaining last gesture position on termination...')
+                try:
+                    # Restore position control mode first
+                    self.restore_position_control()
+
+                    # Send last target positions to hold the posture
+                    position_commands = [(motor_id, self.target_positions[idx])
+                                        for idx, motor_id in enumerate(self.motor_ids)]
+                    self.hardware_manager.set_goal_position(*position_commands)
+                    self.node.get_logger().info('✅ Holding last gesture position')
+                except Exception as e:
+                    self.node.get_logger().error(f'Error maintaining position: {e}')
+                    self.send_zero_currents()
+            else:
+                # No valid targets - send zero currents
+                self.node.get_logger().info('⏹️ No valid position to hold - sending zero currents')
+                try:
+                    zero_currents = [(motor_id, 0.0) for motor_id in self.motor_ids]
+                    self.hardware_manager.set_goal_iq(*zero_currents)
+                except Exception as e:
+                    self.node.get_logger().error(f'Error sending zero currents: {e}')
+
+                # Restore position control mode
+                self.restore_position_control()
 
     def publish_status(self, status, is_executing):
         """Publish execution status"""
@@ -723,9 +742,25 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
             self.send_zero_currents()
             return False
 
-        # Send zero currents at the end
-        self.send_zero_currents()
-        self.node.get_logger().info('✅ Trajectory execution complete')
+        # Hold final position: restore position control and send last target positions
+        self.node.get_logger().info('🔒 Holding final gesture position...')
+
+        # First restore position control mode (while motors still have current)
+        self.restore_position_control()
+
+        # Then send the last target positions to maintain the posture
+        try:
+            position_commands = []
+            for idx, motor_id in enumerate(self.motor_ids):
+                position_commands.append((motor_id, self.target_positions[idx]))
+
+            self.hardware_manager.set_goal_position(*position_commands)
+            self.node.get_logger().info(f'✅ Trajectory complete - holding position: {[f"{p:.3f}" for p in self.target_positions]}')
+        except Exception as e:
+            self.node.get_logger().error(f'Error setting final position: {e}')
+            self.send_zero_currents()
+            return False
+
         return True
 
     def hardware_control_step(self):
