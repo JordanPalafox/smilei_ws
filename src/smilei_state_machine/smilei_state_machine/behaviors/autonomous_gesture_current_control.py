@@ -88,7 +88,7 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
 
         # Velocity estimator parameters
         self.Fc = 35               # Frequency cutoff
-        self.Tl = 0.002            # Loop period (500Hz)
+        self.Tl = 0.010            # Loop period (100Hz) - matches min_control_period
 
         # Velocity estimator variables (one per motor)
         self.theta_estimators = [0.0] * 8
@@ -101,7 +101,7 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
 
         # Control loop timing
         self.default_total_duration = 5.0  # default total gesture duration in seconds
-        self.min_control_period = 0.002  # minimum time between control iterations (500Hz max)
+        self.min_control_period = 0.010  # minimum time between control iterations (100Hz max) - reduced to avoid USB overload
         self.time_per_point = 0.025  # will be calculated dynamically based on total_duration
 
     def setup(self):
