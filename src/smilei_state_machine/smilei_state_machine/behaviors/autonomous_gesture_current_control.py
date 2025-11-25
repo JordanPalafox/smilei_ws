@@ -99,9 +99,10 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
         self.current_velocities = [0.0] * 8
         self.target_positions = [0.0] * 8
 
-        # Control loop timing (matching remote_teleoperation behavior)
-        self.waypoint_duration = 1.0  # seconds per waypoint (slower for testing)
+        # Control loop timing
+        self.default_total_duration = 5.0  # default total gesture duration in seconds
         self.min_control_period = 0.002  # minimum time between control iterations (500Hz max)
+        self.time_per_point = 0.025  # will be calculated dynamically based on total_duration
 
     def setup(self):
         """Initialize the behavior"""
@@ -345,6 +346,9 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
                 self.execution_complete = True
                 self.execution_success = False
                 return py_trees.common.Status.RUNNING
+
+            # Read total duration for smooth timing
+            self.gesture_total_duration = gesture_config.get('total_duration', self.default_total_duration)
 
             # Read loop parameters from YAML (only if not already controlled via topic)
             if not hasattr(self, '_loop_set_by_topic') or not self._loop_set_by_topic:
@@ -632,8 +636,12 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
         left_traj = trajectory['left_arm']['trajectory']
         total_points = max(len(right_traj), len(left_traj))
 
+        # Calculate time per point based on total gesture duration
+        total_duration = getattr(self, 'gesture_total_duration', self.default_total_duration)
+        self.time_per_point = total_duration / max(total_points, 1)  # Avoid division by zero
+
         self.node.get_logger().info(f'▶️ Executing trajectory with CURRENT CONTROL: {total_points} points')
-        self.node.get_logger().info(f'⏱️ Duration per waypoint: {self.waypoint_duration}s')
+        self.node.get_logger().info(f'⏱️ Total duration: {total_duration}s | Time per point: {self.time_per_point*1000:.1f}ms')
 
         # Initialize velocity estimators and get initial motor state
         try:
@@ -673,15 +681,15 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
                     if j < len(left_angles):
                         self.target_positions[j + 4] = left_angles[j]  # Motors 5-8
 
-                # Log target for first and every 10th waypoint
+                # Log target for first and every 10th trajectory point
                 if i == 0 or i % 10 == 0:
-                    self.node.get_logger().info(f'🎯 Waypoint {i}/{total_points}: targets = {[f"{t:.3f}" for t in self.target_positions]}')
+                    self.node.get_logger().info(f'🎯 Point {i}/{total_points}: targets = {[f"{t:.3f}" for t in self.target_positions]}')
 
-                # Control loop for this waypoint - keep trying until duration expires
-                waypoint_start_time = time.time()
+                # Control loop for this trajectory point - keep trying until time expires
+                point_start_time = time.time()
                 iteration_count = 0
 
-                while (time.time() - waypoint_start_time) < self.waypoint_duration:
+                while (time.time() - point_start_time) < self.time_per_point:
                     if not self.running:
                         break
 
@@ -690,7 +698,7 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
                     # SEQUENTIAL HARDWARE ACCESS - all in one place to avoid racing
                     success = self.hardware_control_step()
                     if not success:
-                        self.node.get_logger().warning(f'Hardware control step failed at waypoint {i}, iteration {iteration_count}')
+                        self.node.get_logger().warning(f'Hardware control step failed at point {i}, iteration {iteration_count}')
                         # Continue instead of failing completely
 
                     iteration_count += 1
@@ -706,7 +714,7 @@ class AutonomousGestureCurrentControl(py_trees.behaviour.Behaviour):
                 # Log progress with iteration count
                 if i % 5 == 0:
                     progress = (i / total_points) * 100
-                    self.node.get_logger().info(f'📊 Progress: {progress:.1f}% (waypoint {i}, {iteration_count} control iterations)')
+                    self.node.get_logger().info(f'📊 Progress: {progress:.1f}% (point {i}/{total_points}, {iteration_count} control iterations)')
 
         except Exception as e:
             self.node.get_logger().error(f'Error during trajectory execution: {e}')
