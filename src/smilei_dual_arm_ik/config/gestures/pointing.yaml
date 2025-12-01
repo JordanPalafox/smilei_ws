@@ -1,0 +1,15 @@
+# Gesture: Pointing
+# Description: Robot points forward with right arm
+
+# Execution parameters
+synchronized: false  # Independent arm motion
+interpolation_method: 'cubic'
+steps_per_segment: 50
+total_duration: 2.0  # Total time for entire gesture in seconds (distributed across all interpolated points)
+
+# Right arm waypoints (pointing gesture)
+right_arm_waypoints:
+  - {x: 0.180, y: 0.160, z: 0.320}
+
+# Left arm waypoints (stays in rest position)
+left_arm_waypoints: []

@@ -1,10 +1,12 @@
-# Gesture: Get Attention
+# Gesture: Get Attention (Cartesian Mode)
 # Description: A gesture to get someone's attention
 
 # Execution parameters
+control_mode: 'cartesian'  # Use cartesian waypoints with IK
 synchronized: false  # Independent arm motion
 interpolation_method: 'cubic'
 steps_per_segment: 5
+total_duration: 3.0  # Total time for entire gesture in seconds
 
 # Right arm waypoints (pointing gesture)
 right_arm_waypoints:

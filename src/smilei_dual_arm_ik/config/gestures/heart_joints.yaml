@@ -1,0 +1,29 @@
+# Gesture: Heart (Joint Mode)
+# Description: Large heart gesture made with both arms using direct joint angles
+
+# Execution parameters
+control_mode: 'joint'  # Use direct joint angles (no IK)
+synchronized: false  # Independent arm motion
+interpolation_method: 'cubic'
+steps_per_segment: 15
+total_duration: 3.5  # Total time for entire gesture in seconds
+
+# Right arm waypoints (joint angles in radians)
+# Format: [q1, q2, q3, q4] - Forms the right side of a large heart
+right_arm_waypoints:
+  - [0.3, 0.4, -0.8, 0.2]    # Starting position - bottom center
+  - [0.7, 0.9, -1.6, 0.5]    # Move up and out - right curve
+  - [1.0, 1.2, -2.0, 0.3]    # Top right peak of heart
+  - [0.8, 1.0, -1.5, 0.1]    # Curve down from peak
+  - [0.6, 0.7, -1.1, 0.2]    # Continue down - right side
+  - [0.4, 0.5, -0.9, 0.25]   # Return near bottom
+
+# Left arm waypoints (joint angles in radians)
+# Format: [q1, q2, q3, q4] - Forms the left side of a large heart (mirrored)
+left_arm_waypoints:
+  - [-0.3, -0.4, 0.8, -0.2]   # Starting position - bottom center
+  - [-0.7, -0.9, 1.6, -0.5]   # Move up and out - left curve
+  - [-1.0, -1.2, 2.0, -0.3]   # Top left peak of heart
+  - [-0.8, -1.0, 1.5, -0.1]   # Curve down from peak
+  - [-0.6, -0.7, 1.1, -0.2]   # Continue down - left side
+  - [-0.4, -0.5, 0.9, -0.25]  # Return near bottom

@@ -1,0 +1,45 @@
+# Gesture: Get Attention (Joint Mode)
+# Description: A gesture to get someone's attention using direct joint angles
+
+# Execution parameters
+control_mode: 'joint'  # Use direct joint angles (no IK)
+synchronized: false  # Independent arm motion
+interpolation_method: 'cubic'
+steps_per_segment: 5
+total_duration: 3.0  # Total time for entire gesture in seconds
+
+# Right arm waypoints (joint angles in radians)
+# Format: [q1, q2, q3, q4]
+right_arm_waypoints:
+  # Waypoint 1 - Starting position
+  - [0.5, 0.3, -0.8, 0.2]
+  # Waypoint 2 - Raise arm
+  - [0.8, 0.6, -1.2, 0.4]
+  # Waypoint 3 - Wave motion
+  - [1.0, 0.8, -1.5, 0.3]
+  # Waypoint 4 - Extended position
+  - [1.2, 1.0, -1.8, 0.2]
+  # Waypoint 3 - Return wave
+  - [1.0, 0.8, -1.5, 0.3]
+  # Waypoint 2 - Lower arm
+  - [0.8, 0.6, -1.2, 0.4]
+  # Waypoint 1 - Back to start
+  - [0.5, 0.3, -0.8, 0.2]
+
+# Left arm waypoints (joint angles in radians)
+# Format: [q1, q2, q3, q4]
+left_arm_waypoints:
+  # Waypoint 1 - Starting position (mirrored)
+  - [-0.5, -0.3, 0.8, -0.2]
+  # Waypoint 2 - Raise arm
+  - [-0.8, -0.6, 1.2, -0.4]
+  # Waypoint 3 - Wave motion
+  - [-1.0, -0.8, 1.5, -0.3]
+  # Waypoint 4 - Extended position
+  - [-1.2, -1.0, 1.8, -0.2]
+  # Waypoint 3 - Return wave
+  - [-1.0, -0.8, 1.5, -0.3]
+  # Waypoint 2 - Lower arm
+  - [-0.8, -0.6, 1.2, -0.4]
+  # Waypoint 1 - Back to start
+  - [-0.5, -0.3, 0.8, -0.2]

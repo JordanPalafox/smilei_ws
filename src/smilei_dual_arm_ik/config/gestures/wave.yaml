@@ -1,0 +1,25 @@
+# Gesture: Wave (Cartesian Mode)
+# Description: Robot waves with both arms
+
+# Execution parameters
+control_mode: 'cartesian'  # Use cartesian waypoints with IK
+synchronized: true  # Execute both arms in sync
+interpolation_method: 'cubic'  # cubic, linear, or quintic
+steps_per_segment: 50
+total_duration: 5.0  # Total time for entire gesture in seconds (distributed across all interpolated points)
+
+# Right arm waypoints (in base_link frame)
+right_arm_waypoints:
+  - {x: 0.3, y: 0.2, z: 0.4}   # Start position
+  - {x: 0.3, y: 0.3, z: 0.5}   # Wave up
+  - {x: 0.3, y: 0.2, z: 0.4}   # Wave down
+  - {x: 0.3, y: 0.3, z: 0.5}   # Wave up
+  - {x: 0.3, y: 0.2, z: 0.4}   # Return to start
+
+# Left arm waypoints (in base_link frame)
+left_arm_waypoints:
+  - {x: 0.3, y: -0.2, z: 0.4}  # Start position
+  - {x: 0.3, y: -0.3, z: 0.5}  # Wave up
+  - {x: 0.3, y: -0.2, z: 0.4}  # Wave down
+  - {x: 0.3, y: -0.3, z: 0.5}  # Wave up
+  - {x: 0.3, y: -0.2, z: 0.4}  # Return to start

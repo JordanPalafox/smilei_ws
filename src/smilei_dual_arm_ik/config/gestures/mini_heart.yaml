@@ -1,10 +1,12 @@
-# Gesture: Heart
+# Gesture: Mini Heart (Cartesian Mode)
 # Description: A mini-heart gesture made with both arms
 
 # Execution parameters
+control_mode: 'cartesian'  # Use cartesian waypoints with IK
 synchronized: false  # Independent arm motion
 interpolation_method: 'cubic'
 steps_per_segment: 15
+total_duration: 2.5  # Total time for entire gesture in seconds
 
 # Right arm waypoints (pointing gesture)
 right_arm_waypoints:
