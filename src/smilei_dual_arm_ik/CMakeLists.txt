@@ -35,7 +35,6 @@ install(PROGRAMS
   smilei_dual_arm_ik/gesture_executor_dual_arm.py
   smilei_dual_arm_ik/gesture_executor_hardware.py
   smilei_dual_arm_ik/interactive_marker_node.py
-  smilei_dual_arm_ik/marker_control_node.py
   smilei_dual_arm_ik/hardware_joint_state_publisher.py
   smilei_dual_arm_ik/hardware_waypoint_recorder.py
   DESTINATION lib/${PROJECT_NAME}
