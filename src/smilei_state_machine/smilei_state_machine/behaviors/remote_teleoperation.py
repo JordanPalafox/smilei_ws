@@ -111,24 +111,41 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         try:
             # Declarar parámetros - configuración flexible para número de motores
             # Usar lista de enteros por defecto para evitar problemas de tipos
-            self.node.declare_parameter('remote_teleoperation.motor_ids', [1, 2])  # Por defecto motores 1 y 2
-            self.node.declare_parameter('remote_teleoperation.use_all_motors', False)  # True = usar todos los motores disponibles
-            self.node.declare_parameter('remote_teleoperation.is_machine_a', True)
-            self.node.declare_parameter('remote_teleoperation.machine_a_ip', '192.168.0.144')
-            self.node.declare_parameter('remote_teleoperation.machine_b_ip', '192.168.0.2')
+            self.node.declare_parameter('remote_teleoperation.motor_ids', [1, 2, 3, 4, 5, 6, 7, 8])  # Por defecto todos los motores
+            self.node.declare_parameter('remote_teleoperation.use_all_motors', True)  # True = usar todos los motores disponibles
+            self.node.declare_parameter('remote_teleoperation.operador_ip', '192.168.0.100')
+            self.node.declare_parameter('remote_teleoperation.seguidor_ip', '192.168.0.2')
             self.node.declare_parameter('remote_teleoperation.max_total_motors', 8)  # Máximo de motores en el sistema
             self.node.declare_parameter('remote_teleoperation.debug_udp_latency', False)
             self.node.declare_parameter('remote_teleoperation.debug_pd_control', False)
-            
+
             # Cargar parámetros
             param_motor_ids = self.node.get_parameter('remote_teleoperation.motor_ids').value
             use_all_motors = self.node.get_parameter('remote_teleoperation.use_all_motors').value
-            self.is_machine_a = self.node.get_parameter('remote_teleoperation.is_machine_a').value
-            self.machine_a_ip = self.node.get_parameter('remote_teleoperation.machine_a_ip').value
-            self.machine_b_ip = self.node.get_parameter('remote_teleoperation.machine_b_ip').value
+            operador_ip = self.node.get_parameter('remote_teleoperation.operador_ip').value
+            seguidor_ip = self.node.get_parameter('remote_teleoperation.seguidor_ip').value
             self.max_total_motors = self.node.get_parameter('remote_teleoperation.max_total_motors').value
             self.debug_udp_latency = self.node.get_parameter('remote_teleoperation.debug_udp_latency').value
             self.debug_pd_control = self.node.get_parameter('remote_teleoperation.debug_pd_control').value
+
+            # Determinar si es Operador (Máquina A) o Seguidor (Máquina B) basado en el namespace
+            namespace = self.node.get_namespace()
+            if 'operador' in namespace:
+                self.is_machine_a = True
+                self.machine_a_ip = operador_ip
+                self.machine_b_ip = seguidor_ip
+                self.node.get_logger().info("Configurado como OPERADOR (Máquina A)")
+            elif 'seguidor' in namespace:
+                self.is_machine_a = False
+                self.machine_a_ip = operador_ip
+                self.machine_b_ip = seguidor_ip
+                self.node.get_logger().info("Configurado como SEGUIDOR (Máquina B)")
+            else:
+                # Fallback: usar el primer carácter del nombre del nodo o default
+                self.is_machine_a = True  # Default a operador si no se puede determinar
+                self.machine_a_ip = operador_ip
+                self.machine_b_ip = seguidor_ip
+                self.node.get_logger().warning(f"No se pudo determinar robot desde namespace '{namespace}', usando OPERADOR por defecto")
             if self.debug_udp_latency:
                 self.node.get_logger().info("Depuración de latencia UDP ACTIVADA.")
             if self.debug_pd_control:
@@ -462,7 +479,7 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         """Actualiza posiciones objetivo desde la cola de datos recibidos, usando solo el más reciente."""
         if self.udp_receive_queue.empty():
             return False
-        
+
         # Vaciar la cola para procesar solo el último mensaje y reducir latencia
         latest_entry = None
         while not self.udp_receive_queue.empty():
@@ -470,33 +487,38 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                 latest_entry = self.udp_receive_queue.get_nowait()
             except queue.Empty:
                 break
-        
+
         if latest_entry is not None:
             entry = latest_entry
             # Actualizar posiciones objetivo con validación básica
             while len(self.target_positions) < len(entry):
                 self.target_positions.append(0.0)
-            
+
             for i in range(len(entry)):
                 received_position = entry[i]
                 motor_id = i + 1  # El índice i corresponde al motor_id - 1
 
-                # Aplicar límites de seguridad desde los parámetros cargados
-                joint_name = self.joint_limit_keys.get(motor_id)
-                if joint_name and joint_name in self.joint_limits:
-                    min_lim, max_lim = self.joint_limits[joint_name]
-                    
-                    # Limitar la posición recibida a la región segura
-                    clamped_position = max(min_lim, min(received_position, max_lim))
-                    
-                    if i < len(self.target_positions):
-                        self.target_positions[i] = clamped_position
-                else:
-                    # Fallback a límites generales si no se encuentran límites específicos
-                    if -3.15 < received_position < 3.15:
-                        if i < len(self.target_positions):
-                            self.target_positions[i] = received_position
-        
+                # LÍMITES DE SEGURIDAD DESHABILITADOS - TELEOPERACIÓN SIN RESTRICCIONES
+                # Aplicar directamente la posición recibida sin límites
+                if i < len(self.target_positions):
+                    self.target_positions[i] = received_position
+
+                # CÓDIGO ORIGINAL COMENTADO (límites de seguridad):
+                # joint_name = self.joint_limit_keys.get(motor_id)
+                # if joint_name and joint_name in self.joint_limits:
+                #     min_lim, max_lim = self.joint_limits[joint_name]
+                #
+                #     # Limitar la posición recibida a la región segura
+                #     clamped_position = max(min_lim, min(received_position, max_lim))
+                #
+                #     if i < len(self.target_positions):
+                #         self.target_positions[i] = clamped_position
+                # else:
+                #     # Fallback a límites generales si no se encuentran límites específicos
+                #     if -3.15 < received_position < 3.15:
+                #         if i < len(self.target_positions):
+                #             self.target_positions[i] = received_position
+
         return True
 
     def calculate_control_currents(self):
@@ -535,13 +557,15 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
 
                     # Control PD no lineal exacto (pd_control_node.py líneas 143-144)
                     tau = -kp_value * ((abs(error)**self.p1) * np.sign(error)) - self.kd * vel_estimate
-                    
+
                     # Convertir torque a corriente (pd_control_node.py líneas 147-148)
                     current = tau / self.Kt
-                    
-                    # Límites de seguridad
-                    current = max(-self.max_current, min(self.max_current, current))
-                    
+
+                    # LÍMITES DE CORRIENTE DESHABILITADOS - TELEOPERACIÓN SIN RESTRICCIONES
+                    # No se aplican límites a la corriente calculada
+                    # CÓDIGO ORIGINAL COMENTADO:
+                    # current = max(-self.max_current, min(self.max_current, current))
+
                     currents.append(current)
                     
                     # Debug cada 100 iteraciones - mostrar info para cada motor

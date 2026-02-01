@@ -3,33 +3,48 @@
 import os
 import time
 from pybear import Manager
+from westwood_motor_interfaces.srv import (
+    SetMotorIdAndTarget,
+    SetMotorIdAndTargetCurrent,
+    GetMotorPositions,
+    GetMotorVelocities,
+    GetAvailableMotors,
+    SetMode,
+    SetTorqueEnable
+)
 
 class HardwareManager:
     """Manager robusto para múltiples USBs con remapeo de IDs automático"""
-    
-    def __init__(self, node, usb_ports=None, baudrate=8000000, auto_detect=True, debug=False):
+
+    def __init__(self, node, usb_ports=None, baudrate=8000000, auto_detect=True, debug=False, use_ros2_services=False):
         self.node = node
         self.usb_ports = usb_ports or ['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyUSB2', '/dev/ttyUSB3']
         self.baudrate = baudrate
         self.auto_detect = auto_detect
         self.debug = debug
-        
+        self.use_ros2_services = use_ros2_services  # Nuevo: modo ROS2 services
+
         # Cache para reducir llamadas redundantes
         self.position_cache = {}
         self.velocity_cache = {}
         self.cache_timeout = 0.001  # 1ms cache like pd_control_node.py
-        
+
         # Mapeo de motor ID global a información del USB
         self.motor_to_usb_map = {}
         self.managers = []
         self.usb_to_manager_map = {}
         self.detected_motors = set()
         self.max_motor_scan_range = 10
-        
+
         # Estado de conexión
         self.hardware_connected = False
-        
-        self.initialize_hardware()
+
+        # Clientes ROS2 (si use_ros2_services=True)
+        self.ros2_clients = {}
+        if self.use_ros2_services:
+            self.setup_ros2_clients()
+        else:
+            self.initialize_hardware()
     
     def initialize_hardware(self):
         """Inicializar conexiones de hardware de forma robusta"""
@@ -83,7 +98,85 @@ class HardwareManager:
             self.node.get_logger().info(f'✅ Hardware manager inicializado con {len([m for m in self.managers if m is not None])} USB(s)')
         else:
             self.node.get_logger().warning('⚠️ Hardware manager en modo simulación (sin hardware)')
-    
+
+    def setup_ros2_clients(self):
+        """Configurar clientes de servicios ROS2 para comunicarse con el servidor de motores"""
+        self.node.get_logger().info('🔧 Configurando clientes ROS2 para comunicación con servidor de motores...')
+
+        # El namespace del nodo ya determina qué robot (operador/seguidor)
+        # Los servicios estarán en el namespace actual
+        self.ros2_clients = {
+            'set_position': self.node.create_client(
+                SetMotorIdAndTarget,
+                'westwood_motor/set_motor_id_and_target'
+            ),
+            'set_current': self.node.create_client(
+                SetMotorIdAndTargetCurrent,
+                'westwood_motor/set_motor_id_and_target_current'
+            ),
+            'get_positions': self.node.create_client(
+                GetMotorPositions,
+                'westwood_motor/get_motor_positions'
+            ),
+            'get_velocities': self.node.create_client(
+                GetMotorVelocities,
+                'westwood_motor/get_motor_velocities'
+            ),
+            'get_available': self.node.create_client(
+                GetAvailableMotors,
+                'westwood_motor/get_available_motors'
+            ),
+            'set_mode': self.node.create_client(
+                SetMode,
+                'westwood_motor/set_mode'
+            ),
+            'set_torque': self.node.create_client(
+                SetTorqueEnable,
+                'westwood_motor/set_torque_enable'
+            )
+        }
+
+        self.hardware_connected = True  # Marcar como conectado en modo ROS2
+        self.node.get_logger().info('✅ Clientes ROS2 configurados (modo servicio)')
+
+        # Consultar motores disponibles del servidor
+        self.query_available_motors_from_server()
+
+    def query_available_motors_from_server(self):
+        """Consultar motores disponibles del servidor usando servicio ROS2"""
+        self.node.get_logger().info('🔍 Consultando motores disponibles del servidor...')
+
+        client = self.ros2_clients['get_available']
+
+        # Esperar a que el servicio esté disponible
+        if not client.wait_for_service(timeout_sec=5.0):
+            self.node.get_logger().error('❌ Servicio get_available_motors no disponible después de 5s')
+            return
+
+        # Hacer la llamada síncrona
+        request = GetAvailableMotors.Request()
+
+        try:
+            future = client.call_async(request)
+
+            # Esperar la respuesta (bloqueante)
+            import rclpy
+            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
+
+            if future.done():
+                response = future.result()
+                if response.success:
+                    # Poblar detected_motors con los motores del servidor
+                    self.detected_motors = set(response.motor_ids)
+                    self.node.get_logger().info(f'✅ Motores disponibles del servidor: {sorted(list(self.detected_motors))}')
+                else:
+                    self.node.get_logger().warning(f'⚠️ Servidor reportó error: {response.message}')
+            else:
+                self.node.get_logger().error('❌ Timeout esperando respuesta del servidor')
+
+        except Exception as e:
+            self.node.get_logger().error(f'❌ Error consultando motores disponibles: {e}')
+
     def detect_and_map_motors(self):
         """Detectar automáticamente motores y crear mapeo inteligente como el servidor"""
         self.node.get_logger().info('🔍 Detectando motores...')
@@ -201,20 +294,43 @@ class HardwareManager:
             for motor_id, position in position_pairs:
                 self.node.get_logger().debug(f"[SIM] Motor {motor_id} -> posición {position}")
             return True
-        
+
+        # Si usamos servicios ROS2, llamar al servicio
+        if self.use_ros2_services:
+            motor_ids = [motor_id for motor_id, _ in position_pairs]
+            positions = [position for _, position in position_pairs]
+
+            client = self.ros2_clients['set_position']
+            if not client.wait_for_service(timeout_sec=0.5):
+                self.node.get_logger().warning('Servicio set_motor_id_and_target no disponible')
+                return False
+
+            request = SetMotorIdAndTarget.Request()
+            request.motor_ids = motor_ids
+            request.target_positions = positions
+
+            try:
+                future = client.call_async(request)
+                # No bloqueamos, asumimos éxito
+                return True
+            except Exception as e:
+                self.node.get_logger().error(f"Error llamando servicio set_position: {e}")
+                return False
+
+        # Modo hardware directo (PyBear)
         # Agrupar comandos por manager
         manager_commands = {}
-        
+
         for motor_id, position in position_pairs:
             manager, local_id = self.get_manager_for_motor(motor_id)
             if manager is None or local_id is None:
                 self.node.get_logger().warning(f"Motor {motor_id} no disponible")
                 continue
-            
+
             if manager not in manager_commands:
                 manager_commands[manager] = []
             manager_commands[manager].append((local_id, position))
-        
+
         # Enviar comandos a cada manager
         success = True
         for manager, commands in manager_commands.items():
@@ -223,7 +339,7 @@ class HardwareManager:
             except Exception as e:
                 self.node.get_logger().error(f"Error estableciendo posiciones: {e}")
                 success = False
-        
+
         return success
     
     def set_torque_enable(self, *motor_enable_pairs):
@@ -234,20 +350,42 @@ class HardwareManager:
                 state = "habilitado" if enable else "deshabilitado"
                 self.node.get_logger().debug(f"[SIM] Motor {motor_id} torque {state}")
             return True
-        
+
+        # Si usamos servicios ROS2, llamar al servicio
+        if self.use_ros2_services:
+            motor_ids = [motor_id for motor_id, _ in motor_enable_pairs]
+            enable_states = [bool(enable) for _, enable in motor_enable_pairs]
+
+            client = self.ros2_clients['set_torque']
+            if not client.wait_for_service(timeout_sec=0.5):
+                self.node.get_logger().warning('Servicio set_torque_enable no disponible')
+                return False
+
+            request = SetTorqueEnable.Request()
+            request.motor_ids = motor_ids
+            request.enable_torque = enable_states
+
+            try:
+                future = client.call_async(request)
+                return True
+            except Exception as e:
+                self.node.get_logger().error(f"Error llamando servicio set_torque: {e}")
+                return False
+
+        # Modo hardware directo (PyBear)
         # Agrupar por manager
         manager_commands = {}
-        
+
         for motor_id, enable in motor_enable_pairs:
             manager, local_id = self.get_manager_for_motor(motor_id)
             if manager is None or local_id is None:
                 self.node.get_logger().warning(f"Motor {motor_id} no disponible")
                 continue
-            
+
             if manager not in manager_commands:
                 manager_commands[manager] = []
             manager_commands[manager].append((local_id, enable))
-        
+
         # Enviar comandos
         success = True
         for manager, commands in manager_commands.items():
@@ -256,7 +394,7 @@ class HardwareManager:
             except Exception as e:
                 self.node.get_logger().error(f"Error configurando torque: {e}")
                 success = False
-        
+
         return success
     
     def set_mode(self, *motor_mode_pairs):
@@ -266,20 +404,42 @@ class HardwareManager:
             for motor_id, mode in motor_mode_pairs:
                 self.node.get_logger().debug(f"[SIM] Motor {motor_id} modo {mode}")
             return True
-        
+
+        # Si usamos servicios ROS2, llamar al servicio
+        if self.use_ros2_services:
+            motor_ids = [motor_id for motor_id, _ in motor_mode_pairs]
+            modes = [int(mode) for _, mode in motor_mode_pairs]
+
+            client = self.ros2_clients['set_mode']
+            if not client.wait_for_service(timeout_sec=0.5):
+                self.node.get_logger().warning('Servicio set_mode no disponible')
+                return False
+
+            request = SetMode.Request()
+            request.motor_ids = motor_ids
+            request.modes = modes
+
+            try:
+                future = client.call_async(request)
+                return True
+            except Exception as e:
+                self.node.get_logger().error(f"Error llamando servicio set_mode: {e}")
+                return False
+
+        # Modo hardware directo (PyBear)
         # Agrupar por manager
         manager_commands = {}
-        
+
         for motor_id, mode in motor_mode_pairs:
             manager, local_id = self.get_manager_for_motor(motor_id)
             if manager is None or local_id is None:
                 self.node.get_logger().warning(f"Motor {motor_id} no disponible")
                 continue
-            
+
             if manager not in manager_commands:
                 manager_commands[manager] = []
             manager_commands[manager].append((local_id, mode))
-        
+
         # Enviar comandos
         success = True
         for manager, commands in manager_commands.items():
@@ -288,7 +448,7 @@ class HardwareManager:
             except Exception as e:
                 self.node.get_logger().error(f"Error configurando modo: {e}")
                 success = False
-        
+
         return success
     
     def get_present_position(self, *motor_ids):
@@ -296,7 +456,27 @@ class HardwareManager:
         if not self.hardware_connected:
             # Modo simulación - devolver posiciones cero
             return [0.0 for _ in motor_ids]
-        
+
+        # Si usamos servicios ROS2, llamar al servicio
+        if self.use_ros2_services:
+            client = self.ros2_clients['get_positions']
+            if not client.wait_for_service(timeout_sec=0.1):
+                self.node.get_logger().debug('Servicio get_motor_positions no disponible')
+                return [0.0 for _ in motor_ids]
+
+            request = GetMotorPositions.Request()
+            request.motor_ids = list(motor_ids)
+
+            try:
+                future = client.call_async(request)
+                # No bloqueamos, retornamos ceros y el servicio se procesa en background
+                # En el futuro podríamos cachear el último valor conocido
+                return [0.0 for _ in motor_ids]
+            except Exception as e:
+                self.node.get_logger().debug(f"Error llamando servicio get_positions: {e}")
+                return [0.0 for _ in motor_ids]
+
+        # Modo hardware directo (PyBear)
         positions = []
         for motor_id in motor_ids:
             manager, local_id = self.get_manager_for_motor(motor_id)
