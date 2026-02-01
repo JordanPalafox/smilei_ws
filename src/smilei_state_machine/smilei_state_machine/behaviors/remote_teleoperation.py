@@ -69,6 +69,11 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
         self.max_current = 5.0              # Límite máximo de corriente (A)
         self.error_deadband = 0.05          # Zona muerta para errores pequeños (rad)
         self.max_error = 1.57               # Error máximo permitido (π/2 rad)
+        self.joint_limits = {}
+        self.joint_limit_keys = {
+            1: 'q_l1', 2: 'q_l2', 3: 'q_l3', 4: 'q_l4',
+            5: 'q_r1', 6: 'q_r2', 7: 'q_r3', 8: 'q_r4'
+        }
         
         # Variables de estado de motores
         self.current_positions = [0.0] * 8
@@ -105,6 +110,19 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
             self.node.declare_parameter('remote_teleoperation.machine_a_ip', '192.168.0.144')
             self.node.declare_parameter('remote_teleoperation.machine_b_ip', '192.168.0.2')
             self.node.declare_parameter('remote_teleoperation.max_total_motors', 8)  # Máximo de motores en el sistema
+
+            # Declarar y cargar límites de articulaciones
+            self.node.get_logger().info("Cargando límites de articulaciones desde parámetros...")
+            for joint_name, default_limits in {
+                'q_l1': [-1.5708, 1.5708], 'q_l2': [-1.5708, 0.7854],
+                'q_l3': [-1.5708, 2.3562], 'q_l4': [-1.5708, 1.5708],
+                'q_r1': [-1.5708, 1.5708], 'q_r2': [-0.7854, 1.5708],
+                'q_r3': [-2.3562, 1.5708], 'q_r4': [-1.5708, 1.5708]
+            }.items():
+                param_name = f'joint_limits.{joint_name}'
+                self.node.declare_parameter(param_name, default_limits)
+                self.joint_limits[joint_name] = self.node.get_parameter(param_name).value
+            self.node.get_logger().info(f"Límites de articulaciones cargados: {self.joint_limits}")
             
             # Cargar parámetros
             param_motor_ids = self.node.get_parameter('remote_teleoperation.motor_ids').value
@@ -493,6 +511,34 @@ class RemoteTeleoperation(py_trees.behaviour.Behaviour):
                     
                     # Límites de seguridad
                     current = max(-self.max_current, min(self.max_current, current))
+
+                    # >>> INICIO: Medida de seguridad de límites de articulación (con recuperación)
+                    limit_key = self.joint_limit_keys.get(motor_id)
+                    if limit_key:
+                        limits = self.joint_limits.get(limit_key)
+                        # Asegurarse que los límites existen y son una lista/tupla de 2 elementos
+                        if limits and isinstance(limits, (list, tuple)) and len(limits) == 2:
+                            min_limit, max_limit = limits[0], limits[1]
+                            
+                            # Comprobar si la posición actual está fuera de los límites
+                            is_out_of_bounds = not (min_limit <= current_pos <= max_limit)
+                            
+                            if is_out_of_bounds:
+                                # Si está fuera de los límites, permitir corriente solo si el objetivo está DENTRO de los límites
+                                is_target_in_bounds = (min_limit <= target_pos <= max_limit)
+                                
+                                if not is_target_in_bounds:
+                                    # Si tanto la posición actual como el objetivo están fuera de los límites, forzar corriente a cero.
+                                    self.node.get_logger().warning(
+                                        f"M{motor_id} está fuera de límites (Pos: {current_pos:.3f}) y el "
+                                        f"objetivo también (Target: {target_pos:.3f}). Forzando corriente a 0."
+                                    )
+                                    current = 0.0
+                                # Si la posición actual está fuera pero el objetivo está dentro,
+                                # el controlador PD aplicará naturalmente una corriente correctiva.
+                        else:
+                            self.node.get_logger().warning(f"Límites para M{motor_id} ('{limit_key}') no definidos o malformados.")
+                    # <<< FIN: Medida de seguridad
                     
                     currents.append(current)
                     
