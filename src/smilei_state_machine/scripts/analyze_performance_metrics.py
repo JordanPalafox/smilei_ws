@@ -20,6 +20,34 @@ class PerformanceAnalyzer:
         self.metrics = []
         self.load_all_metrics()
 
+    def _convert_numpy_to_native(self, obj):
+        """Recursively convert numpy types to native Python types"""
+        if obj is None:
+            return None
+
+        # Handle numpy scalars
+        if hasattr(obj, 'item'):
+            return float(obj.item())
+
+        # Handle numpy arrays
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+
+        # Handle numpy numeric types
+        if isinstance(obj, (np.integer, np.floating)):
+            return float(obj)
+
+        # Handle dictionaries recursively
+        if isinstance(obj, dict):
+            return {key: self._convert_numpy_to_native(val) for key, val in obj.items()}
+
+        # Handle lists recursively
+        if isinstance(obj, list):
+            return [self._convert_numpy_to_native(item) for item in obj]
+
+        # Return as-is for native Python types
+        return obj
+
     def load_all_metrics(self):
         """Load all metric files from directory"""
         if not self.metrics_dir.exists():
@@ -35,7 +63,16 @@ class PerformanceAnalyzer:
         for filepath in metric_files:
             try:
                 with open(filepath, 'r') as f:
-                    data = yaml.safe_load(f)
+                    try:
+                        # Try safe_load first (for new files with native Python types)
+                        data = yaml.safe_load(f)
+                    except yaml.constructor.ConstructorError:
+                        # Fallback to unsafe_load for files with numpy objects
+                        f.seek(0)
+                        data = yaml.unsafe_load(f)
+                        # Convert numpy types to native Python types
+                        data = self._convert_numpy_to_native(data)
+
                     if data:
                         self.metrics.append(data)
             except Exception as e:

@@ -62,34 +62,48 @@ class PerformanceMetrics:
 
     def to_dict(self):
         """Convert metrics to dictionary for YAML serialization"""
+        # Helper function to convert numpy types to native Python types
+        def convert_value(val):
+            if val is None:
+                return None
+            # Check if it's a numpy type
+            if hasattr(val, 'item'):  # numpy scalar
+                return float(val.item())
+            elif isinstance(val, np.ndarray):
+                return val.tolist()
+            elif isinstance(val, (np.integer, np.floating)):
+                return float(val)
+            else:
+                return val
+
         return {
             'gesture_name': self.gesture_name,
             'control_mode': self.control_mode,
             'execution_timestamp': self.execution_timestamp,
             'from_cache': self.from_cache,
             'waypoints': {
-                'num_waypoints': self.num_waypoints,
-                'num_interpolated_points': self.num_interpolated_points
+                'num_waypoints': int(convert_value(self.num_waypoints)),
+                'num_interpolated_points': int(convert_value(self.num_interpolated_points))
             },
             'timing_ms': {
-                'ik_solve_time': round(self.ik_solve_time * 1000, 2),
-                'trajectory_planning_time': round(self.trajectory_planning_time * 1000, 2),
-                'cache_load_time': round(self.cache_load_time * 1000, 2),
-                'total_initialization_time': round(self.total_initialization_time * 1000, 2),
-                'trajectory_execution_time': round(self.trajectory_execution_time * 1000, 2)
+                'ik_solve_time': round(float(convert_value(self.ik_solve_time)) * 1000, 2),
+                'trajectory_planning_time': round(float(convert_value(self.trajectory_planning_time)) * 1000, 2),
+                'cache_load_time': round(float(convert_value(self.cache_load_time)) * 1000, 2),
+                'total_initialization_time': round(float(convert_value(self.total_initialization_time)) * 1000, 2),
+                'trajectory_execution_time': round(float(convert_value(self.trajectory_execution_time)) * 1000, 2)
             },
             'cartesian_metrics': {
-                'ik_success_count': self.ik_success_count,
-                'ik_failed_count': self.ik_failed_count,
-                'end_effector_position_error_cm': round(self.end_effector_position_error, 2) if self.end_effector_position_error else None,
-                'dual_arm_sync_error_ms': round(self.dual_arm_sync_error * 1000, 2) if self.dual_arm_sync_error else None
+                'ik_success_count': int(convert_value(self.ik_success_count)),
+                'ik_failed_count': int(convert_value(self.ik_failed_count)),
+                'end_effector_position_error_cm': round(float(convert_value(self.end_effector_position_error)), 2) if self.end_effector_position_error else None,
+                'dual_arm_sync_error_ms': round(float(convert_value(self.dual_arm_sync_error)) * 1000, 2) if self.dual_arm_sync_error else None
             } if self.control_mode == 'cartesian' else None,
             'joint_metrics': {
-                'max_joint_velocity_rad_s': round(self.max_joint_velocity, 3),
-                'max_joint_acceleration_rad_s2': round(self.max_joint_acceleration, 3),
-                'joint_tracking_error_rms_percent': round(self.joint_tracking_error_rms, 2),
-                'joint_tracking_error_max_percent': round(self.joint_tracking_error_max, 2),
-                'velocity_discontinuities': self.velocity_discontinuities
+                'max_joint_velocity_rad_s': round(float(convert_value(self.max_joint_velocity)), 3),
+                'max_joint_acceleration_rad_s2': round(float(convert_value(self.max_joint_acceleration)), 3),
+                'joint_tracking_error_rms_percent': round(float(convert_value(self.joint_tracking_error_rms)), 2),
+                'joint_tracking_error_max_percent': round(float(convert_value(self.joint_tracking_error_max)), 2),
+                'velocity_discontinuities': int(convert_value(self.velocity_discontinuities))
             } if self.control_mode == 'joint' else None
         }
 
