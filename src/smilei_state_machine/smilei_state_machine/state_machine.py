@@ -37,13 +37,8 @@ class StateMachineRoot(py_trees.behaviour.Behaviour):
         # No configuramos los comportamientos aquí, lo haremos en la primera actualización
         # cuando ROS esté completamente inicializado
 
-        # Leer el parámetro de depuración
-        self.node.declare_parameter('debug', False)
-        self.sm_debug = self.node.get_parameter('debug').value
-        if self.sm_debug:
-            self.node.get_logger().info("Depuración de tiempo de la máquina de estados HABILITADA.")
-            self.last_log_time = time.time()
-            self.last_tick_time = time.time()
+        # Debug mode desactivado por defecto (controlado desde dashboard)
+        self.sm_debug = False
     
     def add_state(self, state_name, behavior):
         self.state_behaviors[state_name] = behavior
@@ -187,6 +182,28 @@ def state_command_callback(msg, node):
     else:
         node.get_logger().info(f"⚠️ Mismo estado solicitado: {msg.data}")
 
+def ip_config_callback(msg, node):
+    """Callback para recibir configuración de IPs desde el dashboard"""
+    import json
+    try:
+        config = json.loads(msg.data)
+        operador_ip = config.get("operador_ip", "192.168.0.100")
+        seguidor_ip = config.get("seguidor_ip", "192.168.0.2")
+
+        # Actualizar parámetros ROS
+        node.set_parameters([
+            rclpy.parameter.Parameter('remote_teleoperation.operador_ip',
+                                      rclpy.parameter.Parameter.Type.STRING,
+                                      operador_ip),
+            rclpy.parameter.Parameter('remote_teleoperation.seguidor_ip',
+                                      rclpy.parameter.Parameter.Type.STRING,
+                                      seguidor_ip)
+        ])
+
+        node.get_logger().info(f"✅ IPs actualizadas - Operador: {operador_ip}, Seguidor: {seguidor_ip}")
+    except Exception as e:
+        node.get_logger().error(f"Error procesando configuración de IPs: {e}")
+
 # Función eliminada - ahora usamos spin_once en el loop principal
 
 def main():
@@ -204,20 +221,32 @@ def main():
         10
     )
 
+    # Subscriber para configuración de IPs (global topic)
+    ip_config_sub = node.create_subscription(
+        String,
+        '/teleoperation_ip_config',
+        lambda msg: ip_config_callback(msg, node),
+        10
+    )
+
+    # Publisher para estado actual (para que el dashboard lo reciba)
+    current_state_pub = node.create_publisher(
+        String,
+        'current_state',
+        10
+    )
+
     # Añadir una pausa para asegurar que ROS está inicializado
     time.sleep(2.0)
 
-    # Declarar y obtener los parámetros del hardware manager.
-    # Los valores por defecto se usan si no se encuentran en el yaml.
-    node.declare_parameter('hardware_manager.usb_ports', ['/dev/ttyUSB0'])
-    node.declare_parameter('hardware_manager.baudrate', 8000000)
-    node.declare_parameter('hardware_manager.auto_detect', True)
-    node.declare_parameter('hardware_manager.debug', False)
+    # Parámetros del hardware manager con valores por defecto fijos
+    # Estos valores serán controlados desde el dashboard
+    usb_ports = ['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyUSB2', '/dev/ttyUSB3']
+    baudrate = 8000000
+    auto_detect = True
+    debug = False
 
-    usb_ports = node.get_parameter('hardware_manager.usb_ports').value
-    baudrate = node.get_parameter('hardware_manager.baudrate').value
-    auto_detect = node.get_parameter('hardware_manager.auto_detect').value
-    debug = node.get_parameter('hardware_manager.debug').value
+    node.get_logger().info("Usando configuración por defecto del hardware manager (sin archivo YAML)")
     
     # Inicializar hardware manager robusto
     node.get_logger().info("Inicializando hardware manager robusto...")
@@ -284,11 +313,16 @@ def main():
         while rclpy.ok():
             # Procesar callbacks de ROS primero
             rclpy.spin_once(node, timeout_sec=0.001)
-            
+
             # Luego ejecutar el árbol de comportamiento
             tree.tick()
             node.get_logger().debug(f"Estado actual: {current_state_command}, Completado: {last_completed_state}")
-            
+
+            # Publicar estado actual para el dashboard
+            state_msg = String()
+            state_msg.data = current_state_command
+            current_state_pub.publish(state_msg)
+
             # Pequeña pausa para no saturar el CPU
             time.sleep(0.001)
     except KeyboardInterrupt:
